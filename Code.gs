@@ -131,8 +131,11 @@ function getInvoiceToCreate_(ss, todayStr) {
     'เช็คอิน', 'เช็คเอาท์', 'คืน', 'ยอดรวม (THB)', 'Commission (THB)', 'NET (THB)', 'สถานะ', 'หมายเหตุ',
   ]);
 
+  // เอาเฉพาะ row ✅ Matched (row รวม) และ row โอนแล้ว ปกติ — ไม่เอา row ↳ ย่อย
   const filtered = rows.filter(r => {
     const status = String(r[idx.สถานะ] || '').trim();
+    const note = String(r[idx.หมายเหตุ] || '').trim();
+    if (note.startsWith('↳')) return false; // row ย่อย ข้ามไป
     return PAYOUT_STATUSES_FOR_INVOICE.indexOf(status) !== -1;
   });
 
@@ -153,10 +156,10 @@ function getInvoiceToCreate_(ss, todayStr) {
       isNewSeen = true;
     }
 
-    // Parse sub-NETs from หมายเหตุ e.g. "NET ฿81.17 | NET ฿2638.54"
+    // Parse sub-NETs from หมายเหตุ e.g. "✅ Airbnb payout | Nihel(HMCTA5TJ35) NET ฿81.17 | Nihel(HMCTA5TJ35) NET ฿2638.54"
     const notes = String(r[idx.หมายเหตุ] || '');
-    const netMatches = notes.match(/NET\s*฿([\d,]+\.?\d*)/g) || [];
-    const netSubs = netMatches.map(m => m.replace(/NET\s*฿/, '').replace(/,/g, ''));
+    const netMatches = notes.match(/NET\s+฿([\d,]+\.?\d*)/g) || [];
+    const netSubs = netMatches.map(m => parseFloat(m.replace(/NET\s+฿/, '').replace(/,/g, '')));
     const totalNet = r[idx['NET (THB)']] || '';
 
     return {
