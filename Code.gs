@@ -39,9 +39,9 @@ const PAYOUT_STATUSES_FOR_INVOICE = [
 
 // คีย์ที่ใช้เก็บ checkbox state + snapshot ใน Script Properties
 const PROP_KEY_BOOKING_DONE = 'booking_done_v1';      // { resId: true }
-const PROP_KEY_INVOICE_DONE = 'invoice_done_v1';      // { bookingId: true }
+const PROP_KEY_INVOICE_DONE = 'invoice_done_v1';      // { invoiceKey: true }
 const PROP_KEY_BOOKING_SEEN = 'booking_seen_v1';      // { resId: 'yyyy-MM-dd' (first seen) }
-const PROP_KEY_INVOICE_SEEN = 'invoice_seen_v1';      // { bookingId: 'yyyy-MM-dd' (first seen) }
+const PROP_KEY_INVOICE_SEEN = 'invoice_seen_v1';      // { invoiceKey: 'yyyy-MM-dd' (first seen) }
 
 /* ============================================================
  *  Web app entry point
@@ -99,17 +99,23 @@ function getBookingToAdd_(ss, todayStr) {
       isNewToday = true;
     }
 
+    const guest = r[idx['ชื่อแขก']] || '';
+    const checkin = formatCellDate_(r[idx['เช็คอิน']]);
+
     return {
       resId: resId,
       room: r[idx['เลขห้อง']] || '',
-      guest: r[idx['ชื่อแขก']] || '',
-      checkin: formatCellDate_(r[idx['เช็คอิน']]),
+      guest: guest,
+      checkin: checkin,
       checkout: formatCellDate_(r[idx['เช็คเอาท์']]),
       channel: r[idx.Channel] || '',
       note: r[idx.Note] || '',
       firstSeen: firstSeen,
       isNewToday: isNewToday,
       done: !!doneMap[resId],
+      // matching keys
+      confCode: normalizeCode_(resId),
+      matchKey: matchKey_(guest, checkin),
     };
   });
 
@@ -133,7 +139,7 @@ function getInvoiceToCreate_(ss, todayStr) {
   ]);
 
   // Logic:
-  // - row "✅ Matched" = SCB row รวม → เอา (มี sub-NETs ใน notes)
+  // - row "✅ Matched" = SCB row รวม → เอา (มี sub-NETs ใน notes, แยกเป็นหลาย card)
   // - row "โอนแล้ว" ที่ Conf Code ไม่มี SCB Matched = row ปกติ → เอา
   // - row "โอนแล้ว" ที่ Conf Code มี SCB Matched อยู่แล้ว → ข้ามไป (ซ้ำ)
   // - row "↳" (sub-row SCB) → ข้ามไป
@@ -162,46 +168,87 @@ function getInvoiceToCreate_(ss, todayStr) {
   const seenMap = getProp_(PROP_KEY_INVOICE_SEEN);
   let seenChanged = false;
 
-  const out = filtered.map(r => {
+  const out = [];
+
+  filtered.forEach(r => {
     const bookingId = String(r[idx['Booking ID']] || '').trim();
     const detectedDate = formatCellDate_(r[idx['วันที่ตรวจพบ']]);
+    const room = r[idx.ห้อง] || '';
+    const checkin = formatCellDate_(r[idx.เช็คอิน]);
+    const checkout = formatCellDate_(r[idx.เช็คเอาท์]);
+    const nights = r[idx.คืน] || '';
+    const ota = r[idx.OTA] || '';
+    const status = r[idx.สถานะ] || '';
+    const totalNet = r[idx['NET (THB)']] || '';
+    const rawConfCode = String(r[idx['Conf. Code']] || '');
+    const rawGuestField = String(r[idx.ชื่อแขก] || '');
 
-    let firstSeen = seenMap[bookingId];
-    let isNewSeen = false;
-    if (!firstSeen) {
-      firstSeen = todayStr;
-      seenMap[bookingId] = todayStr;
-      seenChanged = true;
-      isNewSeen = true;
+    // Parse sub-entries from หมายเหตุ
+    // e.g. "✅ Airbnb payout | Nihel(HMCTA5TJ35) NET ฿81.17 | Nihel(HMCTA5TJ35) NET ฿2638.54"
+    const notes = String(r[idx.หมายเหตุ] || '');
+    const subPattern = /([^|]+?)\(([^)]+)\)\s*NET\s+฿([\d,]+\.?\d*)/g;
+    const subs = [];
+    let m;
+    while ((m = subPattern.exec(notes)) !== null) {
+      subs.push({
+        guest: m[1].trim(),
+        confCode: normalizeCode_(m[2]),
+        net: parseFloat(m[3].replace(/,/g, '')),
+      });
     }
 
-    // Parse sub-NETs from หมายเหตุ e.g. "✅ Airbnb payout | Nihel(HMCTA5TJ35) NET ฿81.17 | Nihel(HMCTA5TJ35) NET ฿2638.54"
-    const notes = String(r[idx.หมายเหตุ] || '');
-    const netMatches = notes.match(/NET\s+฿([\d,]+\.?\d*)/g) || [];
-    const netSubs = netMatches.map(m => parseFloat(m.replace(/NET\s+฿/, '').replace(/,/g, '')));
-    const totalNet = r[idx['NET (THB)']] || '';
+    // กรณี guest มีหลายชื่อซ้ำ (merged row) ให้เอาชื่อแรกเป็น default
+    const firstGuest = rawGuestField.split(',')[0].trim();
+    const firstConfCode = rawConfCode.split(',')[0].trim();
 
-    // กรณี guest มีหลายชื่อซ้ำ (merged row) ให้เอาชื่อแรก
-    const rawGuest = String(r[idx.ชื่อแขก] || '');
-    const guest = rawGuest.split(',')[0].trim();
-
-    return {
-      bookingId: bookingId,
-      room: r[idx.ห้อง] || '',
-      guest: guest,
-      checkin: formatCellDate_(r[idx.เช็คอิน]),
-      checkout: formatCellDate_(r[idx.เช็คเอาท์]),
-      nights: r[idx.คืน] || '',
+    // ถ้ามีหลาย sub-entry (>1) → แยกเป็นหลาย card ทีละรายการ
+    // ถ้ามี sub-entry เดียวหรือไม่มี → ใช้ค่าจาก row หลัก (1 card)
+    const entries = subs.length > 1 ? subs : [{
+      guest: firstGuest,
+      confCode: normalizeCode_(firstConfCode),
       net: totalNet,
-      netSubs: netSubs,
-      ota: r[idx.OTA] || '',
-      status: r[idx.สถานะ] || '',
-      detectedDate: detectedDate,
-      detectedToday: detectedDate === todayStr,
-      firstSeen: firstSeen,
-      isNewInList: isNewSeen,
-      done: !!doneMap[bookingId],
-    };
+    }];
+
+    entries.forEach((entry, i) => {
+      // invoiceKey ต้อง unique ต่อ entry (สำหรับ checkbox done/seen state)
+      const invoiceKey = entries.length > 1
+        ? bookingId + '#' + (entry.confCode || i)
+        : bookingId;
+
+      let firstSeen = seenMap[invoiceKey];
+      let isNewSeen = false;
+      if (!firstSeen) {
+        firstSeen = todayStr;
+        seenMap[invoiceKey] = todayStr;
+        seenChanged = true;
+        isNewSeen = true;
+      }
+
+      out.push({
+        invoiceKey: invoiceKey,
+        bookingId: bookingId,
+        room: room,
+        guest: entry.guest || firstGuest,
+        checkin: checkin,
+        checkout: checkout,
+        nights: nights,
+        net: entries.length > 1 ? entry.net : totalNet,
+        isSplitFromMulti: entries.length > 1,
+        splitIndex: entries.length > 1 ? (i + 1) : null,
+        splitTotal: entries.length > 1 ? entries.length : null,
+        groupNet: entries.length > 1 ? totalNet : null, // ยอดรวมของ batch เดิม
+        ota: ota,
+        status: status,
+        detectedDate: detectedDate,
+        detectedToday: detectedDate === todayStr,
+        firstSeen: firstSeen,
+        isNewInList: isNewSeen,
+        done: !!doneMap[invoiceKey],
+        // matching keys
+        confCode: entry.confCode || normalizeCode_(firstConfCode),
+        matchKey: matchKey_(entry.guest || firstGuest, checkin),
+      });
+    });
   });
 
   if (seenChanged) setProp_(PROP_KEY_INVOICE_SEEN, seenMap);
@@ -230,12 +277,12 @@ function setBookingDone(resId, done) {
   return true;
 }
 
-function setInvoiceDone(bookingId, done) {
+function setInvoiceDone(invoiceKey, done) {
   const map = getProp_(PROP_KEY_INVOICE_DONE);
   if (done) {
-    map[bookingId] = true;
+    map[invoiceKey] = true;
   } else {
-    delete map[bookingId];
+    delete map[invoiceKey];
   }
   setProp_(PROP_KEY_INVOICE_DONE, map);
   return true;
@@ -264,6 +311,18 @@ function formatCellDate_(val) {
 
 function formatDateYMD_(d) {
   return Utilities.formatDate(d, 'Asia/Bangkok', 'yyyy-MM-dd');
+}
+
+// ตัด whitespace / ตัวอักษรพิเศษ และทำเป็น uppercase สำหรับเทียบ ResId / Conf. Code
+function normalizeCode_(s) {
+  return String(s || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+// คีย์สำรองสำหรับ match แบบ guest+checkin (normalize ชื่อ + วันที่)
+function matchKey_(guest, checkin) {
+  const g = String(guest || '').trim().toLowerCase().replace(/[^a-z0-9ก-๙]/g, '');
+  const c = String(checkin || '').trim();
+  return g + '|' + c;
 }
 
 // Script Properties helpers — ใช้ PropertiesService ของ project นี้

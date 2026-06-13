@@ -60,6 +60,7 @@
     .chip { background: #f0f0f0; border-radius: 6px; padding: 2px 8px; }
     .chip.flag-new { background: #ffd966; color: #5c4500; font-weight: 700; }
     .chip.net { background: #d9ead3; color: #38761d; font-weight: 700; }
+    .chip.split { background: #cfe2ff; color: #1a4d8f; font-weight: 700; }
     .btn-link {
       display: inline-flex; align-items: center; gap: 3px;
       background: none; border: 1px solid #ccc; border-radius: 6px;
@@ -129,10 +130,6 @@
     let DATA = null;
     let showDone = { booking: true, invoice: true };
 
-    function matchKey(guest, checkin) {
-      return String(guest).trim().toLowerCase() + '|' + String(checkin).trim();
-    }
-
     function switchTab(tab) {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
       document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + tab));
@@ -157,17 +154,40 @@
 
     function render() { renderBooking(); renderInvoice(); }
 
-    // Build set of invoice keys for fast lookup
-    function invoiceKeySet() {
-      const s = new Set();
-      (DATA.invoice || []).forEach(x => s.add(matchKey(x.guest, x.checkin)));
-      return s;
+    // ============================================================
+    // Matching: ใช้ confCode (ResId / Conf. Code, normalize แล้ว) เป็นหลัก
+    // ถ้าไม่มี confCode ทั้งสองฝั่ง ค่อย fallback ไปใช้ matchKey (guest|checkin)
+    // ============================================================
+
+    function invoiceMatchSets() {
+      const byConf = new Set();
+      const byKey = new Set();
+      (DATA.invoice || []).forEach(x => {
+        if (x.confCode) byConf.add(x.confCode);
+        if (x.matchKey) byKey.add(x.matchKey);
+      });
+      return { byConf, byKey };
     }
 
-    function bookingKeySet() {
-      const s = new Set();
-      (DATA.booking || []).forEach(x => s.add(matchKey(x.guest, x.checkin)));
-      return s;
+    function bookingMatchSets() {
+      const byConf = new Set();
+      const byKey = new Set();
+      (DATA.booking || []).forEach(x => {
+        if (x.confCode) byConf.add(x.confCode);
+        if (x.matchKey) byKey.add(x.matchKey);
+      });
+      return { byConf, byKey };
+    }
+
+    function hasMatch(item, sets) {
+      if (item.confCode && sets.byConf.has(item.confCode)) return true;
+      if (item.matchKey && sets.byKey.has(item.matchKey)) return true;
+      return false;
+    }
+
+    // คีย์สำหรับ jump/highlight: ใช้ confCode ถ้ามี ไม่งั้นใช้ matchKey
+    function jumpKey(item) {
+      return item.confCode || item.matchKey || '';
     }
 
     function renderBooking() {
@@ -179,7 +199,7 @@
       document.getElementById('bookingSummary').textContent =
         'ทั้งหมด ' + list.length + ' รายการ • ค้างเพิ่ม ' + pending + ' • ใหม่วันนี้ ' + newCount;
 
-      const invKeys = invoiceKeySet();
+      const invSets = invoiceMatchSets();
       const visible = list.filter(x => showDone.booking || !x.done);
       if (!visible.length) { container.innerHTML = '<div class="empty">ไม่มีรายการ</div>'; return; }
 
@@ -187,11 +207,10 @@
         const cls = ['card'];
         if (item.isNewToday) cls.push('is-new');
         if (item.done) cls.push('is-done');
-        const key = matchKey(item.guest, item.checkin);
-        const hasInv = invKeys.has(key);
-        const copyText = esc(item.guest) + ' / ' + esc(item.channel);
+        const hasInv = hasMatch(item, invSets);
+        const jk = jumpKey(item);
 
-        return '<div class="' + cls.join(' ') + '" data-bkey="' + esc(key) + '">' +
+        return '<div class="' + cls.join(' ') + '" data-bjkey="' + esc(jk) + '">' +
           '<input type="checkbox" class="booking-check" data-resid="' + esc(item.resId) + '" ' + (item.done ? 'checked' : '') + '>' +
           '<div class="card-body">' +
             '<div class="card-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
@@ -204,7 +223,7 @@
               '<span class="chip">' + esc(item.channel) + '</span>' +
               '<span class="chip">' + esc(item.resId) + '</span>' +
               (item.isNewToday ? '<span class="chip flag-new">ใหม่วันนี้ ✅</span>' : '') +
-              '<button class="btn-link ' + (hasInv ? 'has-match' : '') + '" onclick="jumpToInvoice(\'' + esc(key).replace(/'/g,"&#39;") + '\')">' +
+              '<button class="btn-link ' + (hasInv ? 'has-match' : '') + '" onclick="jumpToInvoice(\'' + esc(jk).replace(/'/g,"&#39;") + '\')">' +
                 (hasInv ? '🧾 ดู Invoice' : '🧾 ไม่มี Invoice') +
               '</button>' +
             '</div>' +
@@ -222,7 +241,7 @@
       document.getElementById('invoiceSummary').textContent =
         'ทั้งหมด ' + list.length + ' รายการ • ค้างออกบิล ' + pending + ' • ตรวจพบวันนี้ ' + newCount;
 
-      const bkKeys = bookingKeySet();
+      const bkSets = bookingMatchSets();
       const visible = list.filter(x => showDone.invoice || !x.done);
       if (!visible.length) { container.innerHTML = '<div class="empty">ไม่มีรายการ</div>'; return; }
 
@@ -230,23 +249,30 @@
         const cls = ['card'];
         if (item.detectedToday) cls.push('is-new');
         if (item.done) cls.push('is-done');
-        const key = matchKey(item.guest, item.checkin);
-        const hasBk = bkKeys.has(key);
+        const hasBk = hasMatch(item, bkSets);
+        const jk = jumpKey(item);
 
-        return '<div class="' + cls.join(' ') + '" data-ikey="' + esc(key) + '">' +
-          '<input type="checkbox" class="invoice-check" data-bookingid="' + esc(item.bookingId) + '" ' + (item.done ? 'checked' : '') + '>' +
+        const netChip = item.isSplitFromMulti
+          ? '<span class="chip net">฿' + esc(formatNum(item.net)) + ' <span style="opacity:.6;font-weight:400">(รวม NET ฿' + esc(formatNum(item.groupNet)) + ')</span></span>'
+          : '<span class="chip net">NET ฿' + esc(formatNum(item.net)) + '</span>';
+
+        const splitChip = item.isSplitFromMulti
+          ? '<span class="chip split">รายการ ' + esc(item.splitIndex) + '/' + esc(item.splitTotal) + '</span>'
+          : '';
+
+        return '<div class="' + cls.join(' ') + '" data-ijkey="' + esc(jk) + '">' +
+          '<input type="checkbox" class="invoice-check" data-invoicekey="' + esc(item.invoiceKey) + '" ' + (item.done ? 'checked' : '') + '>' +
           '<div class="card-body">' +
             '<div class="card-title">ห้อง ' + esc(item.room) + ' — ' + esc(item.guest) + '</div>' +
             '<div class="card-sub">' + esc(item.checkin) + ' → ' + esc(item.checkout) +
               (item.nights ? ' (' + esc(item.nights) + ' คืน)' : '') + '</div>' +
             '<div class="card-meta">' +
               '<span class="chip">' + esc(item.ota) + '</span>' +
-              (item.netSubs && item.netSubs.length > 1
-                ? item.netSubs.map(s => '<span class="chip net">฿' + esc(s) + ' <span style="opacity:.6;font-weight:400">(NET ฿' + esc(String(item.net)) + ')</span></span>').join('')
-                : '<span class="chip net">NET ฿' + esc(String(item.net)) + '</span>') +
+              splitChip +
+              netChip +
               '<span class="chip">ตรวจพบ ' + esc(item.detectedDate) + '</span>' +
               (item.detectedToday ? '<span class="chip flag-new">ตรวจพบวันนี้ ✅</span>' : '') +
-              '<button class="btn-link ' + (hasBk ? 'has-match' : '') + '" onclick="jumpToBooking(\'' + esc(key).replace(/'/g,"&#39;") + '\')">' +
+              '<button class="btn-link ' + (hasBk ? 'has-match' : '') + '" onclick="jumpToBooking(\'' + esc(jk).replace(/'/g,"&#39;") + '\')">' +
                 (hasBk ? '📅 ดู Booking' : '📅 ไม่มี Booking') +
               '</button>' +
             '</div>' +
@@ -255,23 +281,30 @@
       }).join('');
     }
 
+    function formatNum(n) {
+      const v = parseFloat(n);
+      if (isNaN(v)) return String(n == null ? '' : n);
+      return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
     function jumpToInvoice(key) {
       switchTab('invoice');
-      setTimeout(() => highlightCard('ikey', key), 50);
+      setTimeout(() => highlightCard('ijkey', key), 50);
     }
 
     function jumpToBooking(key) {
       switchTab('booking');
-      setTimeout(() => highlightCard('bkey', key), 50);
+      setTimeout(() => highlightCard('bjkey', key), 50);
     }
 
     function highlightCard(attr, key) {
       document.querySelectorAll('.card').forEach(c => c.classList.remove('highlighted'));
-      const el = document.querySelector('[data-' + attr + '="' + key.replace(/"/g, '\\"') + '"]');
-      if (el) {
-        el.classList.add('highlighted');
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        setTimeout(() => el.classList.remove('highlighted'), 3000);
+      if (!key) { showToast('ไม่พบรายการที่ตรงกัน'); return; }
+      const els = document.querySelectorAll('[data-' + attr + '="' + key.replace(/"/g, '\\"') + '"]');
+      if (els.length) {
+        els.forEach(el => el.classList.add('highlighted'));
+        els[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setTimeout(() => els.forEach(el => el.classList.remove('highlighted')), 3000);
       } else {
         showToast('ไม่พบรายการที่ตรงกัน');
       }
@@ -306,17 +339,17 @@
         .setBookingDone(resId, checked);
     }
 
-    function onInvoiceToggle(bookingId, checked, el) {
+    function onInvoiceToggle(invoiceKey, checked, el) {
       el.disabled = true;
       google.script.run
         .withSuccessHandler(() => {
-          const item = DATA.invoice.find(x => x.bookingId === bookingId);
+          const item = DATA.invoice.find(x => x.invoiceKey === invoiceKey);
           if (item) item.done = checked;
           el.disabled = false;
           renderInvoice();
         })
         .withFailureHandler(() => { el.checked = !checked; el.disabled = false; })
-        .setInvoiceDone(bookingId, checked);
+        .setInvoiceDone(invoiceKey, checked);
     }
 
     document.getElementById('bookingList').addEventListener('change', function(e) {
@@ -325,7 +358,7 @@
     });
     document.getElementById('invoiceList').addEventListener('change', function(e) {
       const el = e.target;
-      if (el.classList.contains('invoice-check')) onInvoiceToggle(el.dataset.bookingid, el.checked, el);
+      if (el.classList.contains('invoice-check')) onInvoiceToggle(el.dataset.invoicekey, el.checked, el);
     });
 
     function esc(s) {
