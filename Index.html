@@ -8,153 +8,90 @@
       --new-bg: #fff2cc;
       --done-bg: #d9ead3;
       --border: #e0e0e0;
+      --highlight: #c9e0ff;
     }
     * { box-sizing: border-box; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Sarabun", Roboto, sans-serif;
-      margin: 0;
-      padding: 0;
-      background: #f5f6f8;
-      color: #222;
+      margin: 0; padding: 0; background: #f5f6f8; color: #222;
     }
-    header {
-      background: var(--primary);
-      color: white;
-      padding: 16px 20px;
-    }
-    header h1 {
-      margin: 0;
-      font-size: 18px;
-    }
-    header p {
-      margin: 4px 0 0;
-      font-size: 12px;
-      opacity: 0.85;
-    }
+    header { background: var(--primary); color: white; padding: 16px 20px; }
+    header h1 { margin: 0; font-size: 18px; }
+    header p { margin: 4px 0 0; font-size: 12px; opacity: 0.85; }
     .tabs {
-      display: flex;
-      background: white;
+      display: flex; background: white;
       border-bottom: 1px solid var(--border);
-      position: sticky;
-      top: 0;
-      z-index: 10;
+      position: sticky; top: 0; z-index: 10;
     }
     .tab-btn {
-      flex: 1;
-      padding: 14px 8px;
-      text-align: center;
-      cursor: pointer;
-      font-weight: 600;
-      font-size: 14px;
-      color: #666;
-      border: none;
-      background: none;
-      border-bottom: 3px solid transparent;
+      flex: 1; padding: 14px 8px; text-align: center; cursor: pointer;
+      font-weight: 600; font-size: 14px; color: #666;
+      border: none; background: none; border-bottom: 3px solid transparent;
     }
-    .tab-btn.active {
-      color: var(--primary);
-      border-bottom-color: var(--primary);
-    }
+    .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
     .badge {
-      display: inline-block;
-      background: #e0e0e0;
-      color: #555;
-      border-radius: 10px;
-      padding: 1px 8px;
-      font-size: 11px;
-      margin-left: 4px;
+      display: inline-block; background: #e0e0e0; color: #555;
+      border-radius: 10px; padding: 1px 8px; font-size: 11px; margin-left: 4px;
     }
     .content { padding: 12px; }
     .panel { display: none; }
     .panel.active { display: block; }
-
     .card {
-      background: white;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px 14px;
-      margin-bottom: 10px;
-      display: flex;
-      gap: 10px;
-      align-items: flex-start;
-      transition: opacity 0.2s, background 0.2s;
+      background: white; border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px 14px; margin-bottom: 10px;
+      display: flex; gap: 10px; align-items: flex-start;
+      transition: opacity 0.2s, background 0.2s, box-shadow 0.3s;
     }
-    .card.is-new {
-      background: var(--new-bg);
-      border-color: #ffd966;
-    }
-    .card.is-done {
-      opacity: 0.5;
-      background: var(--done-bg);
+    .card.is-new { background: var(--new-bg); border-color: #ffd966; }
+    .card.is-done { opacity: 0.5; background: var(--done-bg); }
+    .card.highlighted {
+      background: var(--highlight) !important;
+      border-color: var(--primary) !important;
+      box-shadow: 0 0 0 3px rgba(74,134,232,0.3);
     }
     .card input[type=checkbox] {
-      width: 22px;
-      height: 22px;
-      flex-shrink: 0;
-      margin-top: 2px;
+      width: 22px; height: 22px; flex-shrink: 0; margin-top: 2px;
       accent-color: var(--primary);
     }
     .card-body { flex: 1; min-width: 0; }
-    .card-title {
-      font-weight: 700;
-      font-size: 15px;
-      margin-bottom: 2px;
-      word-break: break-word;
+    .card-title { font-weight: 700; font-size: 15px; margin-bottom: 2px; word-break: break-word; }
+    .card-sub { font-size: 13px; color: #555; margin-bottom: 4px; }
+    .card-meta { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: #777; align-items: center; }
+    .chip { background: #f0f0f0; border-radius: 6px; padding: 2px 8px; }
+    .chip.flag-new { background: #ffd966; color: #5c4500; font-weight: 700; }
+    .chip.net { background: #d9ead3; color: #38761d; font-weight: 700; }
+    .btn-link {
+      display: inline-flex; align-items: center; gap: 3px;
+      background: none; border: 1px solid #ccc; border-radius: 6px;
+      padding: 2px 8px; font-size: 12px; cursor: pointer; color: #444;
+      transition: background 0.15s;
     }
-    .card-sub {
-      font-size: 13px;
-      color: #555;
-      margin-bottom: 4px;
+    .btn-link:hover { background: #e8f0fe; border-color: var(--primary); color: var(--primary); }
+    .btn-link.has-match { border-color: var(--primary); color: var(--primary); font-weight: 600; }
+    .btn-copy {
+      display: inline-flex; align-items: center; gap: 3px;
+      background: none; border: 1px solid #ccc; border-radius: 6px;
+      padding: 2px 8px; font-size: 12px; cursor: pointer; color: #444;
+      transition: background 0.15s;
     }
-    .card-meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      font-size: 12px;
-      color: #777;
-    }
-    .chip {
-      background: #f0f0f0;
-      border-radius: 6px;
-      padding: 2px 8px;
-    }
-    .chip.flag-new {
-      background: #ffd966;
-      color: #5c4500;
-      font-weight: 700;
-    }
-    .chip.net {
-      background: #d9ead3;
-      color: #38761d;
-      font-weight: 700;
-    }
-    .empty {
-      text-align: center;
-      color: #999;
-      padding: 40px 0;
-      font-size: 14px;
-    }
-    .loading {
-      text-align: center;
-      padding: 40px 0;
-      color: #999;
-    }
+    .btn-copy:hover { background: #f0f0f0; }
+    .btn-copy.copied { border-color: #38761d; color: #38761d; }
+    .empty { text-align: center; color: #999; padding: 40px 0; font-size: 14px; }
+    .loading { text-align: center; padding: 40px 0; color: #999; }
     .toolbar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 10px;
-      font-size: 13px;
-      color: #666;
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 10px; font-size: 13px; color: #666;
     }
     .toggle-done {
-      font-size: 12px;
-      color: var(--primary);
-      cursor: pointer;
-      text-decoration: underline;
-      background: none;
-      border: none;
+      font-size: 12px; color: var(--primary); cursor: pointer;
+      text-decoration: underline; background: none; border: none;
     }
+    .toast {
+      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      background: #333; color: white; padding: 8px 18px; border-radius: 20px;
+      font-size: 13px; opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 999;
+    }
+    .toast.show { opacity: 1; }
   </style>
 </head>
 <body>
@@ -162,7 +99,6 @@
     <h1>🏠 The Loft — Booking &amp; Invoice To-Do</h1>
     <p id="todayLabel">กำลังโหลด...</p>
   </header>
-
   <div class="tabs">
     <button class="tab-btn active" data-tab="booking" onclick="switchTab('booking')">
       📅 Booking To Add <span class="badge" id="bookingCount">-</span>
@@ -171,7 +107,6 @@
       🧾 Invoice To Create <span class="badge" id="invoiceCount">-</span>
     </button>
   </div>
-
   <div class="content">
     <div class="panel active" id="panel-booking">
       <div class="toolbar">
@@ -180,7 +115,6 @@
       </div>
       <div id="bookingList" class="loading">กำลังโหลดข้อมูล...</div>
     </div>
-
     <div class="panel" id="panel-invoice">
       <div class="toolbar">
         <span id="invoiceSummary"></span>
@@ -189,28 +123,30 @@
       <div id="invoiceList" class="loading">กำลังโหลดข้อมูล...</div>
     </div>
   </div>
+  <div class="toast" id="toast"></div>
 
   <script>
     let DATA = null;
     let showDone = { booking: true, invoice: true };
+
+    function matchKey(guest, checkin) {
+      return String(guest).trim().toLowerCase() + '|' + String(checkin).trim();
+    }
 
     function switchTab(tab) {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
       document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + tab));
     }
 
-    function toggleShowDone(tab) {
-      showDone[tab] = !showDone[tab];
-      render();
-    }
+    function toggleShowDone(tab) { showDone[tab] = !showDone[tab]; render(); }
 
     function load() {
       google.script.run.withSuccessHandler(onData).withFailureHandler(onError).getDashboardData();
     }
 
     function onError(err) {
-      document.getElementById('bookingList').innerHTML = '<div class="empty">โหลดข้อมูลไม่สำเร็จ: ' + err.message + '</div>';
-      document.getElementById('invoiceList').innerHTML = '<div class="empty">โหลดข้อมูลไม่สำเร็จ: ' + err.message + '</div>';
+      document.getElementById('bookingList').innerHTML = '<div class="empty">โหลดไม่สำเร็จ: ' + err.message + '</div>';
+      document.getElementById('invoiceList').innerHTML = '<div class="empty">โหลดไม่สำเร็จ: ' + err.message + '</div>';
     }
 
     function onData(data) {
@@ -219,9 +155,19 @@
       render();
     }
 
-    function render() {
-      renderBooking();
-      renderInvoice();
+    function render() { renderBooking(); renderInvoice(); }
+
+    // Build set of invoice keys for fast lookup
+    function invoiceKeySet() {
+      const s = new Set();
+      (DATA.invoice || []).forEach(x => s.add(matchKey(x.guest, x.checkin)));
+      return s;
+    }
+
+    function bookingKeySet() {
+      const s = new Set();
+      (DATA.booking || []).forEach(x => s.add(matchKey(x.guest, x.checkin)));
+      return s;
     }
 
     function renderBooking() {
@@ -229,32 +175,38 @@
       const container = document.getElementById('bookingList');
       const newCount = list.filter(x => x.isNewToday && !x.done).length;
       const pending = list.filter(x => !x.done).length;
-
       document.getElementById('bookingCount').textContent = pending;
       document.getElementById('bookingSummary').textContent =
         'ทั้งหมด ' + list.length + ' รายการ • ค้างเพิ่ม ' + pending + ' • ใหม่วันนี้ ' + newCount;
 
+      const invKeys = invoiceKeySet();
       const visible = list.filter(x => showDone.booking || !x.done);
-      if (visible.length === 0) {
-        container.innerHTML = '<div class="empty">ไม่มีรายการ</div>';
-        return;
-      }
+      if (!visible.length) { container.innerHTML = '<div class="empty">ไม่มีรายการ</div>'; return; }
 
       container.innerHTML = visible.map(item => {
         const cls = ['card'];
         if (item.isNewToday) cls.push('is-new');
         if (item.done) cls.push('is-done');
+        const key = matchKey(item.guest, item.checkin);
+        const hasInv = invKeys.has(key);
+        const copyText = esc(item.guest) + ' / ' + esc(item.channel);
 
-        return '<div class="' + cls.join(' ') + '">' +
+        return '<div class="' + cls.join(' ') + '" data-bkey="' + esc(key) + '">' +
           '<input type="checkbox" class="booking-check" data-resid="' + esc(item.resId) + '" ' + (item.done ? 'checked' : '') + '>' +
           '<div class="card-body">' +
-            '<div class="card-title">' + esc(item.room) + ' — ' + esc(item.guest) + '</div>' +
+            '<div class="card-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+              esc(item.room) + ' — ' + esc(item.guest) +
+              '<button class="btn-copy" onclick="copyText(\'' + esc(item.guest).replace(/'/g,"&#39;") + ' / ' + esc(item.channel).replace(/'/g,"&#39;") + '\', this)" title="Copy ชื่อแขก / OTA">📋</button>' +
+            '</div>' +
             '<div class="card-sub">' + esc(item.checkin) + ' → ' + esc(item.checkout) +
               (item.note ? ' • ' + esc(item.note) : '') + '</div>' +
             '<div class="card-meta">' +
               '<span class="chip">' + esc(item.channel) + '</span>' +
               '<span class="chip">' + esc(item.resId) + '</span>' +
               (item.isNewToday ? '<span class="chip flag-new">ใหม่วันนี้ ✅</span>' : '') +
+              '<button class="btn-link ' + (hasInv ? 'has-match' : '') + '" onclick="jumpToInvoice(\'' + esc(key).replace(/'/g,"&#39;") + '\')">' +
+                (hasInv ? '🧾 ดู Invoice' : '🧾 ไม่มี Invoice') +
+              '</button>' +
             '</div>' +
           '</div>' +
         '</div>';
@@ -266,23 +218,22 @@
       const container = document.getElementById('invoiceList');
       const newCount = list.filter(x => x.detectedToday && !x.done).length;
       const pending = list.filter(x => !x.done).length;
-
       document.getElementById('invoiceCount').textContent = pending;
       document.getElementById('invoiceSummary').textContent =
         'ทั้งหมด ' + list.length + ' รายการ • ค้างออกบิล ' + pending + ' • ตรวจพบวันนี้ ' + newCount;
 
+      const bkKeys = bookingKeySet();
       const visible = list.filter(x => showDone.invoice || !x.done);
-      if (visible.length === 0) {
-        container.innerHTML = '<div class="empty">ไม่มีรายการ</div>';
-        return;
-      }
+      if (!visible.length) { container.innerHTML = '<div class="empty">ไม่มีรายการ</div>'; return; }
 
       container.innerHTML = visible.map(item => {
         const cls = ['card'];
         if (item.detectedToday) cls.push('is-new');
         if (item.done) cls.push('is-done');
+        const key = matchKey(item.guest, item.checkin);
+        const hasBk = bkKeys.has(key);
 
-        return '<div class="' + cls.join(' ') + '">' +
+        return '<div class="' + cls.join(' ') + '" data-ikey="' + esc(key) + '">' +
           '<input type="checkbox" class="invoice-check" data-bookingid="' + esc(item.bookingId) + '" ' + (item.done ? 'checked' : '') + '>' +
           '<div class="card-body">' +
             '<div class="card-title">ห้อง ' + esc(item.room) + ' — ' + esc(item.guest) + '</div>' +
@@ -293,10 +244,51 @@
               '<span class="chip net">NET ฿' + esc(item.net) + '</span>' +
               '<span class="chip">ตรวจพบ ' + esc(item.detectedDate) + '</span>' +
               (item.detectedToday ? '<span class="chip flag-new">ตรวจพบวันนี้ ✅</span>' : '') +
+              '<button class="btn-link ' + (hasBk ? 'has-match' : '') + '" onclick="jumpToBooking(\'' + esc(key).replace(/'/g,"&#39;") + '\')">' +
+                (hasBk ? '📅 ดู Booking' : '📅 ไม่มี Booking') +
+              '</button>' +
             '</div>' +
           '</div>' +
         '</div>';
       }).join('');
+    }
+
+    function jumpToInvoice(key) {
+      switchTab('invoice');
+      setTimeout(() => highlightCard('ikey', key), 50);
+    }
+
+    function jumpToBooking(key) {
+      switchTab('booking');
+      setTimeout(() => highlightCard('bkey', key), 50);
+    }
+
+    function highlightCard(attr, key) {
+      document.querySelectorAll('.card').forEach(c => c.classList.remove('highlighted'));
+      const el = document.querySelector('[data-' + attr + '="' + key.replace(/"/g, '\\"') + '"]');
+      if (el) {
+        el.classList.add('highlighted');
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setTimeout(() => el.classList.remove('highlighted'), 3000);
+      } else {
+        showToast('ไม่พบรายการที่ตรงกัน');
+      }
+    }
+
+    function copyText(text, btn) {
+      navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = '✅';
+        btn.classList.add('copied');
+        showToast('คัดลอกแล้ว: ' + text);
+        setTimeout(() => { btn.textContent = '📋'; btn.classList.remove('copied'); }, 2000);
+      }).catch(() => showToast('ไม่สามารถคัดลอกได้'));
+    }
+
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2500);
     }
 
     function onBookingToggle(resId, checked, el) {
@@ -325,26 +317,18 @@
         .setInvoiceDone(bookingId, checked);
     }
 
-    document.getElementById('bookingList').addEventListener('change', function (e) {
+    document.getElementById('bookingList').addEventListener('change', function(e) {
       const el = e.target;
-      if (el.classList.contains('booking-check')) {
-        onBookingToggle(el.dataset.resid, el.checked, el);
-      }
+      if (el.classList.contains('booking-check')) onBookingToggle(el.dataset.resid, el.checked, el);
     });
-
-    document.getElementById('invoiceList').addEventListener('change', function (e) {
+    document.getElementById('invoiceList').addEventListener('change', function(e) {
       const el = e.target;
-      if (el.classList.contains('invoice-check')) {
-        onInvoiceToggle(el.dataset.bookingid, el.checked, el);
-      }
+      if (el.classList.contains('invoice-check')) onInvoiceToggle(el.dataset.bookingid, el.checked, el);
     });
 
     function esc(s) {
       return String(s == null ? '' : s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
     load();
