@@ -134,23 +134,27 @@ function getInvoiceToCreate_(ss, todayStr) {
 
   // Logic:
   // - row "✅ Matched" = SCB row รวม → เอา (มี sub-NETs ใน notes)
-  // - row "โอนแล้ว" ที่ Booking ID ไม่มีลูกน้ำ = row ปกติ → เอา
-  // - row "โอนแล้ว" ที่เป็น sub-row ของ batch = ข้าม (Booking ID ซ้ำกับ row matched)
-  // ใช้ Booking ID ที่มีลูกน้ำเป็น signal ของ row merged (✅ Matched)
-  const matchedBookingIds = new Set(
-    rows
-      .filter(r => String(r[idx.สถานะ] || '').includes('Matched'))
-      .flatMap(r => String(r[idx['Booking ID']] || '').split(',').map(s => s.trim()))
-  );
+  // - row "โอนแล้ว" ที่ Conf Code ไม่มี SCB Matched = row ปกติ → เอา
+  // - row "โอนแล้ว" ที่ Conf Code มี SCB Matched อยู่แล้ว → ข้ามไป (ซ้ำ)
+  // - row "↳" (sub-row SCB) → ข้ามไป
+
+  // เก็บ Conf Codes ที่มี SCB Matched row
+  const matchedConfCodes = new Set();
+  rows.forEach(r => {
+    const status = String(r[idx.สถานะ] || '').trim();
+    if (status.includes('Matched')) {
+      String(r[idx['Conf. Code']] || '').split(',').forEach(c => matchedConfCodes.add(c.trim()));
+    }
+  });
 
   const filtered = rows.filter(r => {
     const status = String(r[idx.สถานะ] || '').trim();
-    const bookingId = String(r[idx['Booking ID']] || '').trim();
+    const confCode = String(r[idx['Conf. Code']] || '').trim();
     const note = String(r[idx.หมายเหตุ] || '').trim();
     if (note.startsWith('↳')) return false;
     if (!PAYOUT_STATUSES_FOR_INVOICE.includes(status)) return false;
-    // ถ้าเป็น row โอนแล้ว ปกติ แต่ Booking ID นี้มี row Matched อยู่แล้ว → ข้ามไป
-    if (status !== '✅ Matched - Airbnb payout' && matchedBookingIds.has(bookingId)) return false;
+    // ถ้าเป็น row โอนแล้ว ปกติ แต่ Conf Code นี้มี SCB Matched อยู่แล้ว → ข้ามไป
+    if (!status.includes('Matched') && matchedConfCodes.has(confCode)) return false;
     return true;
   });
 
@@ -177,10 +181,14 @@ function getInvoiceToCreate_(ss, todayStr) {
     const netSubs = netMatches.map(m => parseFloat(m.replace(/NET\s+฿/, '').replace(/,/g, '')));
     const totalNet = r[idx['NET (THB)']] || '';
 
+    // กรณี guest มีหลายชื่อซ้ำ (merged row) ให้เอาชื่อแรก
+    const rawGuest = String(r[idx.ชื่อแขก] || '');
+    const guest = rawGuest.split(',')[0].trim();
+
     return {
       bookingId: bookingId,
       room: r[idx.ห้อง] || '',
-      guest: r[idx.ชื่อแขก] || '',
+      guest: guest,
       checkin: formatCellDate_(r[idx.เช็คอิน]),
       checkout: formatCellDate_(r[idx.เช็คเอาท์]),
       nights: r[idx.คืน] || '',
