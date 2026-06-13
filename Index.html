@@ -241,7 +241,9 @@
               (item.nights ? ' (' + esc(item.nights) + ' คืน)' : '') + '</div>' +
             '<div class="card-meta">' +
               '<span class="chip">' + esc(item.ota) + '</span>' +
-              '<span class="chip net">NET ฿' + esc(item.net) + '</span>' +
+              (item.netSubs && item.netSubs.length > 1
+                ? item.netSubs.map(s => '<span class="chip net">฿' + esc(s) + ' <span style="opacity:.6;font-weight:400">(NET ฿' + esc(String(item.net)) + ')</span></span>').join('')
+                : '<span class="chip net">NET ฿' + esc(String(item.net)) + '</span>') +
               '<span class="chip">ตรวจพบ ' + esc(item.detectedDate) + '</span>' +
               (item.detectedToday ? '<span class="chip flag-new">ตรวจพบวันนี้ ✅</span>' : '') +
               '<button class="btn-link ' + (hasBk ? 'has-match' : '') + '" onclick="jumpToBooking(\'' + esc(key).replace(/'/g,"&#39;") + '\')">' +

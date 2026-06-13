@@ -153,6 +153,12 @@ function getInvoiceToCreate_(ss, todayStr) {
       isNewSeen = true;
     }
 
+    // Parse sub-NETs from หมายเหตุ e.g. "NET ฿81.17 | NET ฿2638.54"
+    const notes = String(r[idx.หมายเหตุ] || '');
+    const netMatches = notes.match(/NET\s*฿([\d,]+\.?\d*)/g) || [];
+    const netSubs = netMatches.map(m => m.replace(/NET\s*฿/, '').replace(/,/g, ''));
+    const totalNet = r[idx['NET (THB)']] || '';
+
     return {
       bookingId: bookingId,
       room: r[idx.ห้อง] || '',
@@ -160,7 +166,8 @@ function getInvoiceToCreate_(ss, todayStr) {
       checkin: formatCellDate_(r[idx.เช็คอิน]),
       checkout: formatCellDate_(r[idx.เช็คเอาท์]),
       nights: r[idx.คืน] || '',
-      net: r[idx['NET (THB)']] || '',
+      net: totalNet,
+      netSubs: netSubs,
       ota: r[idx.OTA] || '',
       status: r[idx.สถานะ] || '',
       detectedDate: detectedDate,
