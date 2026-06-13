@@ -206,9 +206,10 @@ function getInvoiceToCreate_(ss, todayStr) {
 
   if (seenChanged) setProp_(PROP_KEY_INVOICE_SEEN, seenMap);
 
+  // เรียงตามวันที่เงินเข้า (detectedDate) ใหม่สุดบนสุด
   out.sort((a, b) => {
-    if (a.firstSeen !== b.firstSeen) return a.firstSeen < b.firstSeen ? 1 : -1;
-    return a.detectedDate < b.detectedDate ? 1 : -1;
+    if (a.detectedDate !== b.detectedDate) return a.detectedDate < b.detectedDate ? 1 : -1;
+    return a.guest < b.guest ? -1 : 1;
   });
   return out;
 }
