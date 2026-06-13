@@ -1,0 +1,4 @@
+.git/**
+.gitignore
+.claspignore
+README.md
