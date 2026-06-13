@@ -34,6 +34,7 @@ const SRC_PAYOUT_SHEET = 'Payout_Income_Log';
 const PAYOUT_STATUSES_FOR_INVOICE = [
   'โอนแล้ว',
   'โอนแล้ว (Resolution Payout)',
+  '✅ Matched - Airbnb payout',
 ];
 
 // คีย์ที่ใช้เก็บ checkbox state + snapshot ใน Script Properties
@@ -131,12 +132,26 @@ function getInvoiceToCreate_(ss, todayStr) {
     'เช็คอิน', 'เช็คเอาท์', 'คืน', 'ยอดรวม (THB)', 'Commission (THB)', 'NET (THB)', 'สถานะ', 'หมายเหตุ',
   ]);
 
-  // เอาเฉพาะ row ✅ Matched (row รวม) และ row โอนแล้ว ปกติ — ไม่เอา row ↳ ย่อย
+  // Logic:
+  // - row "✅ Matched" = SCB row รวม → เอา (มี sub-NETs ใน notes)
+  // - row "โอนแล้ว" ที่ Booking ID ไม่มีลูกน้ำ = row ปกติ → เอา
+  // - row "โอนแล้ว" ที่เป็น sub-row ของ batch = ข้าม (Booking ID ซ้ำกับ row matched)
+  // ใช้ Booking ID ที่มีลูกน้ำเป็น signal ของ row merged (✅ Matched)
+  const matchedBookingIds = new Set(
+    rows
+      .filter(r => String(r[idx.สถานะ] || '').includes('Matched'))
+      .flatMap(r => String(r[idx['Booking ID']] || '').split(',').map(s => s.trim()))
+  );
+
   const filtered = rows.filter(r => {
     const status = String(r[idx.สถานะ] || '').trim();
+    const bookingId = String(r[idx['Booking ID']] || '').trim();
     const note = String(r[idx.หมายเหตุ] || '').trim();
-    if (note.startsWith('↳')) return false; // row ย่อย ข้ามไป
-    return PAYOUT_STATUSES_FOR_INVOICE.indexOf(status) !== -1;
+    if (note.startsWith('↳')) return false;
+    if (!PAYOUT_STATUSES_FOR_INVOICE.includes(status)) return false;
+    // ถ้าเป็น row โอนแล้ว ปกติ แต่ Booking ID นี้มี row Matched อยู่แล้ว → ข้ามไป
+    if (status !== '✅ Matched - Airbnb payout' && matchedBookingIds.has(bookingId)) return false;
+    return true;
   });
 
   const doneMap = getProp_(PROP_KEY_INVOICE_DONE);
