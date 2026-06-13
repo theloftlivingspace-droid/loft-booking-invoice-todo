@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    :root {
+      --primary: #4a86e8;
+      --new-bg: #fff2cc;
+      --done-bg: #d9ead3;
+      --border: #e0e0e0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Sarabun", Roboto, sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #f5f6f8;
+      color: #222;
+    }
+    header {
+      background: var(--primary);
+      color: white;
+      padding: 16px 20px;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 18px;
+    }
+    header p {
+      margin: 4px 0 0;
+      font-size: 12px;
+      opacity: 0.85;
+    }
+    .tabs {
+      display: flex;
+      background: white;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 14px 8px;
+      text-align: center;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 14px;
+      color: #666;
+      border: none;
+      background: none;
+      border-bottom: 3px solid transparent;
+    }
+    .tab-btn.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+    }
+    .badge {
+      display: inline-block;
+      background: #e0e0e0;
+      color: #555;
+      border-radius: 10px;
+      padding: 1px 8px;
+      font-size: 11px;
+      margin-left: 4px;
+    }
+    .content { padding: 12px; }
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    .card {
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 10px;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      transition: opacity 0.2s, background 0.2s;
+    }
+    .card.is-new {
+      background: var(--new-bg);
+      border-color: #ffd966;
+    }
+    .card.is-done {
+      opacity: 0.5;
+      background: var(--done-bg);
+    }
+    .card input[type=checkbox] {
+      width: 22px;
+      height: 22px;
+      flex-shrink: 0;
+      margin-top: 2px;
+      accent-color: var(--primary);
+    }
+    .card-body { flex: 1; min-width: 0; }
+    .card-title {
+      font-weight: 700;
+      font-size: 15px;
+      margin-bottom: 2px;
+      word-break: break-word;
+    }
+    .card-sub {
+      font-size: 13px;
+      color: #555;
+      margin-bottom: 4px;
+    }
+    .card-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      font-size: 12px;
+      color: #777;
+    }
+    .chip {
+      background: #f0f0f0;
+      border-radius: 6px;
+      padding: 2px 8px;
+    }
+    .chip.flag-new {
+      background: #ffd966;
+      color: #5c4500;
+      font-weight: 700;
+    }
+    .chip.net {
+      background: #d9ead3;
+      color: #38761d;
+      font-weight: 700;
+    }
+    .empty {
+      text-align: center;
+      color: #999;
+      padding: 40px 0;
+      font-size: 14px;
+    }
+    .loading {
+      text-align: center;
+      padding: 40px 0;
+      color: #999;
+    }
+    .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      font-size: 13px;
+      color: #666;
+    }
+    .toggle-done {
+      font-size: 12px;
+      color: var(--primary);
+      cursor: pointer;
+      text-decoration: underline;
+      background: none;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🏠 The Loft — Booking &amp; Invoice To-Do</h1>
+    <p id="todayLabel">กำลังโหลด...</p>
+  </header>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="booking" onclick="switchTab('booking')">
+      📅 Booking To Add <span class="badge" id="bookingCount">-</span>
+    </button>
+    <button class="tab-btn" data-tab="invoice" onclick="switchTab('invoice')">
+      🧾 Invoice To Create <span class="badge" id="invoiceCount">-</span>
+    </button>
+  </div>
+
+  <div class="content">
+    <div class="panel active" id="panel-booking">
+      <div class="toolbar">
+        <span id="bookingSummary"></span>
+        <button class="toggle-done" onclick="toggleShowDone('booking')">แสดง/ซ่อนรายการที่ทำแล้ว</button>
+      </div>
+      <div id="bookingList" class="loading">กำลังโหลดข้อมูล...</div>
+    </div>
+
+    <div class="panel" id="panel-invoice">
+      <div class="toolbar">
+        <span id="invoiceSummary"></span>
+        <button class="toggle-done" onclick="toggleShowDone('invoice')">แสดง/ซ่อนรายการที่ทำแล้ว</button>
+      </div>
+      <div id="invoiceList" class="loading">กำลังโหลดข้อมูล...</div>
+    </div>
+  </div>
+
+  <script>
+    let DATA = null;
+    let showDone = { booking: true, invoice: true };
+
+    function switchTab(tab) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+      document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + tab));
+    }
+
+    function toggleShowDone(tab) {
+      showDone[tab] = !showDone[tab];
+      render();
+    }
+
+    function load() {
+      google.script.run.withSuccessHandler(onData).withFailureHandler(onError).getDashboardData();
+    }
+
+    function onError(err) {
+      document.getElementById('bookingList').innerHTML = '<div class="empty">โหลดข้อมูลไม่สำเร็จ: ' + err.message + '</div>';
+      document.getElementById('invoiceList').innerHTML = '<div class="empty">โหลดข้อมูลไม่สำเร็จ: ' + err.message + '</div>';
+    }
+
+    function onData(data) {
+      DATA = data;
+      document.getElementById('todayLabel').textContent = 'วันนี้: ' + data.today + ' • ข้อมูลจาก Sheet1 / Payout_Income_Log';
+      render();
+    }
+
+    function render() {
+      renderBooking();
+      renderInvoice();
+    }
+
+    function renderBooking() {
+      const list = DATA.booking;
+      const container = document.getElementById('bookingList');
+      const newCount = list.filter(x => x.isNewToday && !x.done).length;
+      const pending = list.filter(x => !x.done).length;
+
+      document.getElementById('bookingCount').textContent = pending;
+      document.getElementById('bookingSummary').textContent =
+        'ทั้งหมด ' + list.length + ' รายการ • ค้างเพิ่ม ' + pending + ' • ใหม่วันนี้ ' + newCount;
+
+      const visible = list.filter(x => showDone.booking || !x.done);
+      if (visible.length === 0) {
+        container.innerHTML = '<div class="empty">ไม่มีรายการ</div>';
+        return;
+      }
+
+      container.innerHTML = visible.map(item => {
+        const cls = ['card'];
+        if (item.isNewToday) cls.push('is-new');
+        if (item.done) cls.push('is-done');
+
+        return '<div class="' + cls.join(' ') + '">' +
+          '<input type="checkbox" class="booking-check" data-resid="' + esc(item.resId) + '" ' + (item.done ? 'checked' : '') + '>' +
+          '<div class="card-body">' +
+            '<div class="card-title">' + esc(item.room) + ' — ' + esc(item.guest) + '</div>' +
+            '<div class="card-sub">' + esc(item.checkin) + ' → ' + esc(item.checkout) +
+              (item.note ? ' • ' + esc(item.note) : '') + '</div>' +
+            '<div class="card-meta">' +
+              '<span class="chip">' + esc(item.channel) + '</span>' +
+              '<span class="chip">' + esc(item.resId) + '</span>' +
+              (item.isNewToday ? '<span class="chip flag-new">ใหม่วันนี้ ✅</span>' : '') +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+    }
+
+    function renderInvoice() {
+      const list = DATA.invoice;
+      const container = document.getElementById('invoiceList');
+      const newCount = list.filter(x => x.detectedToday && !x.done).length;
+      const pending = list.filter(x => !x.done).length;
+
+      document.getElementById('invoiceCount').textContent = pending;
+      document.getElementById('invoiceSummary').textContent =
+        'ทั้งหมด ' + list.length + ' รายการ • ค้างออกบิล ' + pending + ' • ตรวจพบวันนี้ ' + newCount;
+
+      const visible = list.filter(x => showDone.invoice || !x.done);
+      if (visible.length === 0) {
+        container.innerHTML = '<div class="empty">ไม่มีรายการ</div>';
+        return;
+      }
+
+      container.innerHTML = visible.map(item => {
+        const cls = ['card'];
+        if (item.detectedToday) cls.push('is-new');
+        if (item.done) cls.push('is-done');
+
+        return '<div class="' + cls.join(' ') + '">' +
+          '<input type="checkbox" class="invoice-check" data-bookingid="' + esc(item.bookingId) + '" ' + (item.done ? 'checked' : '') + '>' +
+          '<div class="card-body">' +
+            '<div class="card-title">ห้อง ' + esc(item.room) + ' — ' + esc(item.guest) + '</div>' +
+            '<div class="card-sub">' + esc(item.checkin) + ' → ' + esc(item.checkout) +
+              (item.nights ? ' (' + esc(item.nights) + ' คืน)' : '') + '</div>' +
+            '<div class="card-meta">' +
+              '<span class="chip">' + esc(item.ota) + '</span>' +
+              '<span class="chip net">NET ฿' + esc(item.net) + '</span>' +
+              '<span class="chip">ตรวจพบ ' + esc(item.detectedDate) + '</span>' +
+              (item.detectedToday ? '<span class="chip flag-new">ตรวจพบวันนี้ ✅</span>' : '') +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+    }
+
+    function onBookingToggle(resId, checked, el) {
+      el.disabled = true;
+      google.script.run
+        .withSuccessHandler(() => {
+          const item = DATA.booking.find(x => x.resId === resId);
+          if (item) item.done = checked;
+          el.disabled = false;
+          renderBooking();
+        })
+        .withFailureHandler(() => { el.checked = !checked; el.disabled = false; })
+        .setBookingDone(resId, checked);
+    }
+
+    function onInvoiceToggle(bookingId, checked, el) {
+      el.disabled = true;
+      google.script.run
+        .withSuccessHandler(() => {
+          const item = DATA.invoice.find(x => x.bookingId === bookingId);
+          if (item) item.done = checked;
+          el.disabled = false;
+          renderInvoice();
+        })
+        .withFailureHandler(() => { el.checked = !checked; el.disabled = false; })
+        .setInvoiceDone(bookingId, checked);
+    }
+
+    document.getElementById('bookingList').addEventListener('change', function (e) {
+      const el = e.target;
+      if (el.classList.contains('booking-check')) {
+        onBookingToggle(el.dataset.resid, el.checked, el);
+      }
+    });
+
+    document.getElementById('invoiceList').addEventListener('change', function (e) {
+      const el = e.target;
+      if (el.classList.contains('invoice-check')) {
+        onInvoiceToggle(el.dataset.bookingid, el.checked, el);
+      }
+    });
+
+    function esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    load();
+  </script>
+</body>
+</html>
