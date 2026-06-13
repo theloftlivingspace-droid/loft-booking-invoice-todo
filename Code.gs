@@ -114,10 +114,7 @@ function getBookingToAdd_(ss, todayStr) {
 
   if (seenChanged) setProp_(PROP_KEY_BOOKING_SEEN, seenMap);
 
-  out.sort((a, b) => {
-    if (a.isNewToday !== b.isNewToday) return a.isNewToday ? -1 : 1;
-    return a.checkin < b.checkin ? 1 : -1;
-  });
+  out.reverse();
   return out;
 }
 
