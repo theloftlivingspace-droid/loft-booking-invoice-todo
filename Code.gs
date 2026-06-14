@@ -418,10 +418,6 @@ function pushToGithub() {
       Logger.log('📄 ' + path + ' → ' + sha.slice(0,8));
       return { path: path, mode: '100644', type: 'blob', sha: sha };
     });
-      const blobSha = JSON.parse(blobRes.getContentText()).sha;
-      Logger.log('📄 ' + path + ' → ' + blobSha);
-      return { path: path, mode: '100644', type: 'blob', sha: blobSha };
-    });
 
   // Get latest commit + tree
   const refRes = UrlFetchApp.fetch(API + '/repos/' + REPO + '/git/ref/heads/' + BRANCH, { headers: headers });
