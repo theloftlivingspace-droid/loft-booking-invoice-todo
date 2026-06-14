@@ -54,13 +54,20 @@
       accent-color: var(--primary);
     }
     .card-body { flex: 1; min-width: 0; }
-    .card-title { font-weight: 700; font-size: 15px; margin-bottom: 2px; word-break: break-word; }
+    .card-title { font-weight: 700; font-size: 15px; margin-bottom: 2px; word-break: break-word; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .card-sub { font-size: 13px; color: #555; margin-bottom: 4px; }
     .card-meta { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: #777; align-items: center; }
     .chip { background: #f0f0f0; border-radius: 6px; padding: 2px 8px; }
     .chip.flag-new { background: #ffd966; color: #5c4500; font-weight: 700; }
-    .chip.net { background: #d9ead3; color: #38761d; font-weight: 700; }
+    .chip.net { background: #d9ead3; color: #38761d; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; }
     .chip.split { background: #cfe2ff; color: #1a4d8f; font-weight: 700; }
+    .btn-copy-net {
+      background: none; border: none; cursor: pointer; padding: 0 2px;
+      font-size: 13px; color: #38761d; opacity: 0.7; transition: opacity 0.15s;
+      line-height: 1;
+    }
+    .btn-copy-net:hover { opacity: 1; }
+    .btn-copy-net.copied { color: #1a4d8f; }
     .btn-link {
       display: inline-flex; align-items: center; gap: 3px;
       background: none; border: 1px solid #ccc; border-radius: 6px;
@@ -73,7 +80,6 @@
       display: inline-flex; align-items: center; gap: 3px;
       background: none; border: 1px solid #ccc; border-radius: 6px;
       padding: 2px 8px; font-size: 12px; cursor: pointer; color: #444;
-      transition: background 0.15s;
     }
     .btn-copy:hover { background: #f0f0f0; }
     .btn-copy.copied { border-color: #38761d; color: #38761d; }
@@ -155,51 +161,46 @@
     function render() { renderBooking(); renderInvoice(); }
 
     // ============================================================
-    // Matching: ใช้ confCode (ResId / Conf. Code, normalize แล้ว) เป็นหลัก
-    // ถ้าไม่มี confCode ทั้งสองฝั่ง ค่อย fallback ไปใช้ matchKey (guest|checkin)
+    // Multi-key matching:
+    //  1. confCode (HM code from Payout Conf. Code vs ResId in Sheet1 if present)
+    //  2. firstName + checkin
+    //  3. checkin + room
     // ============================================================
 
-    function invoiceMatchSets() {
+    function buildMatchSets(items) {
       const byConf = new Set();
-      const byKey = new Set();
-      (DATA.invoice || []).forEach(x => {
+      const byFirstCheckin = new Set();
+      const byCheckinRoom = new Set();
+      items.forEach(x => {
         if (x.confCode) byConf.add(x.confCode);
-        if (x.matchKey) byKey.add(x.matchKey);
+        if (x.firstCheckinKey) byFirstCheckin.add(x.firstCheckinKey);
+        if (x.checkinRoomKey) byCheckinRoom.add(x.checkinRoomKey);
       });
-      return { byConf, byKey };
-    }
-
-    function bookingMatchSets() {
-      const byConf = new Set();
-      const byKey = new Set();
-      (DATA.booking || []).forEach(x => {
-        if (x.confCode) byConf.add(x.confCode);
-        if (x.matchKey) byKey.add(x.matchKey);
-      });
-      return { byConf, byKey };
+      return { byConf, byFirstCheckin, byCheckinRoom };
     }
 
     function hasMatch(item, sets) {
       if (item.confCode && sets.byConf.has(item.confCode)) return true;
-      if (item.matchKey && sets.byKey.has(item.matchKey)) return true;
+      if (item.firstCheckinKey && sets.byFirstCheckin.has(item.firstCheckinKey)) return true;
+      if (item.checkinRoomKey && sets.byCheckinRoom.has(item.checkinRoomKey)) return true;
       return false;
     }
 
-    // คีย์สำหรับ jump/highlight: ใช้ confCode ถ้ามี ไม่งั้นใช้ matchKey
     function jumpKey(item) {
-      return item.confCode || item.matchKey || '';
+      // prefer firstCheckinKey as jump anchor (most reliable cross-sheet)
+      return item.firstCheckinKey || item.confCode || '';
     }
 
     function renderBooking() {
       const list = DATA.booking;
       const container = document.getElementById('bookingList');
-      const newCount = list.filter(x => x.isNewToday && !x.done).length;
       const pending = list.filter(x => !x.done).length;
+      const newCount = list.filter(x => x.isNewToday && !x.done).length;
       document.getElementById('bookingCount').textContent = pending;
       document.getElementById('bookingSummary').textContent =
         'ทั้งหมด ' + list.length + ' รายการ • ค้างเพิ่ม ' + pending + ' • ใหม่วันนี้ ' + newCount;
 
-      const invSets = invoiceMatchSets();
+      const invSets = buildMatchSets(DATA.invoice);
       const visible = list.filter(x => showDone.booking || !x.done);
       if (!visible.length) { container.innerHTML = '<div class="empty">ไม่มีรายการ</div>'; return; }
 
@@ -207,15 +208,15 @@
         const cls = ['card'];
         if (item.isNewToday) cls.push('is-new');
         if (item.done) cls.push('is-done');
-        const hasInv = hasMatch(item, invSets);
+        const hasMat = hasMatch(item, invSets);
         const jk = jumpKey(item);
 
         return '<div class="' + cls.join(' ') + '" data-bjkey="' + esc(jk) + '">' +
           '<input type="checkbox" class="booking-check" data-resid="' + esc(item.resId) + '" ' + (item.done ? 'checked' : '') + '>' +
           '<div class="card-body">' +
-            '<div class="card-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+            '<div class="card-title">' +
               esc(item.room) + ' — ' + esc(item.guest) +
-              '<button class="btn-copy" onclick="copyText(\'' + esc(item.guest).replace(/'/g,"&#39;") + ' / ' + esc(item.channel).replace(/'/g,"&#39;") + '\', this)" title="Copy ชื่อแขก / OTA">📋</button>' +
+              '<button class="btn-copy" onclick="copyText(\'' + esc(item.guest).replace(/'/g,"&#39;") + '\', this)" title="Copy ชื่อแขก">📋</button>' +
             '</div>' +
             '<div class="card-sub">' + esc(item.checkin) + ' → ' + esc(item.checkout) +
               (item.note ? ' • ' + esc(item.note) : '') + '</div>' +
@@ -223,8 +224,8 @@
               '<span class="chip">' + esc(item.channel) + '</span>' +
               '<span class="chip">' + esc(item.resId) + '</span>' +
               (item.isNewToday ? '<span class="chip flag-new">ใหม่วันนี้ ✅</span>' : '') +
-              '<button class="btn-link ' + (hasInv ? 'has-match' : '') + '" onclick="jumpToInvoice(\'' + esc(jk).replace(/'/g,"&#39;") + '\')">' +
-                (hasInv ? '🧾 ดู Invoice' : '🧾 ไม่มี Invoice') +
+              '<button class="btn-link ' + (hasMat ? 'has-match' : '') + '" onclick="jumpToInvoice(\'' + esc(jk).replace(/'/g,"&#39;") + '\')">' +
+                (hasMat ? '🧾 ดู Invoice' : '🧾 ไม่มี Invoice') +
               '</button>' +
             '</div>' +
           '</div>' +
@@ -235,13 +236,13 @@
     function renderInvoice() {
       const list = DATA.invoice;
       const container = document.getElementById('invoiceList');
-      const newCount = list.filter(x => x.detectedToday && !x.done).length;
       const pending = list.filter(x => !x.done).length;
+      const newCount = list.filter(x => x.detectedToday && !x.done).length;
       document.getElementById('invoiceCount').textContent = pending;
       document.getElementById('invoiceSummary').textContent =
         'ทั้งหมด ' + list.length + ' รายการ • ค้างออกบิล ' + pending + ' • ตรวจพบวันนี้ ' + newCount;
 
-      const bkSets = bookingMatchSets();
+      const bkSets = buildMatchSets(DATA.booking);
       const visible = list.filter(x => showDone.invoice || !x.done);
       if (!visible.length) { container.innerHTML = '<div class="empty">ไม่มีรายการ</div>'; return; }
 
@@ -249,16 +250,20 @@
         const cls = ['card'];
         if (item.detectedToday) cls.push('is-new');
         if (item.done) cls.push('is-done');
-        const hasBk = hasMatch(item, bkSets);
+        const hasMat = hasMatch(item, bkSets);
         const jk = jumpKey(item);
 
-        const netChip = item.isSplitFromMulti
-          ? '<span class="chip net">฿' + esc(formatNum(item.net)) + ' <span style="opacity:.6;font-weight:400">(รวม NET ฿' + esc(formatNum(item.groupNet)) + ')</span></span>'
-          : '<span class="chip net">NET ฿' + esc(formatNum(item.net)) + '</span>';
+        const netNum = formatNum(item.net);
+        const netRaw = String(item.net == null ? '' : item.net).replace(/[^0-9.]/g, '');
+
+        const netChip = '<span class="chip net">' +
+          'NET ฿' + esc(netNum) +
+          (item.isSplitFromMulti ? ' <span style="opacity:.55;font-weight:400;font-size:11px">(รวม ฿' + esc(formatNum(item.groupNet)) + ')</span>' : '') +
+          '<button class="btn-copy-net" onclick="copyNetNum(\'' + netRaw + '\', this)" title="Copy ยอด">⎘</button>' +
+        '</span>';
 
         const splitChip = item.isSplitFromMulti
-          ? '<span class="chip split">รายการ ' + esc(item.splitIndex) + '/' + esc(item.splitTotal) + '</span>'
-          : '';
+          ? '<span class="chip split">รายการ ' + item.splitIndex + '/' + item.splitTotal + '</span>' : '';
 
         return '<div class="' + cls.join(' ') + '" data-ijkey="' + esc(jk) + '">' +
           '<input type="checkbox" class="invoice-check" data-invoicekey="' + esc(item.invoiceKey) + '" ' + (item.done ? 'checked' : '') + '>' +
@@ -272,8 +277,8 @@
               netChip +
               '<span class="chip">ตรวจพบ ' + esc(item.detectedDate) + '</span>' +
               (item.detectedToday ? '<span class="chip flag-new">ตรวจพบวันนี้ ✅</span>' : '') +
-              '<button class="btn-link ' + (hasBk ? 'has-match' : '') + '" onclick="jumpToBooking(\'' + esc(jk).replace(/'/g,"&#39;") + '\')">' +
-                (hasBk ? '📅 ดู Booking' : '📅 ไม่มี Booking') +
+              '<button class="btn-link ' + (hasMat ? 'has-match' : '') + '" onclick="jumpToBooking(\'' + esc(jk).replace(/'/g,"&#39;") + '\')">' +
+                (hasMat ? '📅 ดู Booking' : '📅 ไม่มี Booking') +
               '</button>' +
             '</div>' +
           '</div>' +
@@ -282,7 +287,7 @@
     }
 
     function formatNum(n) {
-      const v = parseFloat(n);
+      const v = parseFloat(String(n == null ? '' : n).replace(/,/g, ''));
       if (isNaN(v)) return String(n == null ? '' : n);
       return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
@@ -300,7 +305,7 @@
     function highlightCard(attr, key) {
       document.querySelectorAll('.card').forEach(c => c.classList.remove('highlighted'));
       if (!key) { showToast('ไม่พบรายการที่ตรงกัน'); return; }
-      const els = document.querySelectorAll('[data-' + attr + '="' + key.replace(/"/g, '\\"') + '"]');
+      const els = document.querySelectorAll('[data-' + attr + '="' + CSS.escape(key) + '"]');
       if (els.length) {
         els.forEach(el => el.classList.add('highlighted'));
         els[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -308,6 +313,15 @@
       } else {
         showToast('ไม่พบรายการที่ตรงกัน');
       }
+    }
+
+    function copyNetNum(numStr, btn) {
+      navigator.clipboard.writeText(numStr).then(() => {
+        btn.textContent = '✅';
+        btn.classList.add('copied');
+        showToast('คัดลอกแล้ว: ' + numStr);
+        setTimeout(() => { btn.textContent = '⎘'; btn.classList.remove('copied'); }, 2000);
+      }).catch(() => showToast('ไม่สามารถคัดลอกได้'));
     }
 
     function copyText(text, btn) {

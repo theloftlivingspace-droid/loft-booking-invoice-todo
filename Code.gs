@@ -101,10 +101,11 @@ function getBookingToAdd_(ss, todayStr) {
 
     const guest = r[idx['ชื่อแขก']] || '';
     const checkin = formatCellDate_(r[idx['เช็คอิน']]);
+    const room = String(r[idx['เลขห้อง']] || '').trim();
 
     return {
       resId: resId,
-      room: r[idx['เลขห้อง']] || '',
+      room: room,
       guest: guest,
       checkin: checkin,
       checkout: formatCellDate_(r[idx['เช็คเอาท์']]),
@@ -113,9 +114,10 @@ function getBookingToAdd_(ss, todayStr) {
       firstSeen: firstSeen,
       isNewToday: isNewToday,
       done: !!doneMap[resId],
-      // matching keys
-      confCode: normalizeCode_(resId),
-      matchKey: matchKey_(guest, checkin),
+      // matching keys (multi-strategy)
+      confCode: normalizeCode_(resId),            // unlikely to match Payout HM codes
+      firstCheckinKey: firstNameCheckinKey_(guest, checkin),  // firstName + checkin (best cross-sheet key)
+      checkinRoomKey: checkinRoomKey_(checkin, room),         // checkin + room (fallback)
     };
   });
 
@@ -244,9 +246,10 @@ function getInvoiceToCreate_(ss, todayStr) {
         firstSeen: firstSeen,
         isNewInList: isNewSeen,
         done: !!doneMap[invoiceKey],
-        // matching keys
+        // matching keys (multi-strategy)
         confCode: entry.confCode || normalizeCode_(firstConfCode),
-        matchKey: matchKey_(entry.guest || firstGuest, checkin),
+        firstCheckinKey: firstNameCheckinKey_(entry.guest || firstGuest, checkin),
+        checkinRoomKey: checkinRoomKey_(checkin, room),
       });
     });
   });
@@ -318,11 +321,22 @@ function normalizeCode_(s) {
   return String(s || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
-// คีย์สำรองสำหรับ match แบบ guest+checkin (normalize ชื่อ + วันที่)
-function matchKey_(guest, checkin) {
-  const g = String(guest || '').trim().toLowerCase().replace(/[^a-z0-9ก-๙]/g, '');
-  const c = String(checkin || '').trim();
-  return g + '|' + c;
+// firstName + checkin: ดึงชื่อแรก (before space/comma) lowercase ไม่มีอักขระพิเศษ
+// ใช้จับคู่ข้ามชีตได้ดีที่สุด เช่น "Nihel Ben Naceur" → "nihel" + "2026-05-03"
+function firstNameCheckinKey_(guest, checkin) {
+  const raw = String(guest || '').trim();
+  // รองรับทั้ง "Last, First" และ "First Last"
+  const parts = raw.split(/[\s,]+/);
+  // ถ้ามี comma → format "Last, First" → เอา parts[1] (First), ไม่งั้นเอา parts[0]
+  const firstName = (raw.includes(',') && parts.length > 1 ? parts[1] : parts[0]) || '';
+  const fn = firstName.toLowerCase().replace(/[^a-z0-9ก-๙]/g, '');
+  return fn + '|' + String(checkin || '').trim();
+}
+
+// checkin + roomNumber: fallback เผื่อชื่อพิมพ์ต่างกัน
+function checkinRoomKey_(checkin, room) {
+  const r = String(room || '').trim().replace(/\s+/g, '').toLowerCase();
+  return String(checkin || '').trim() + '|' + r;
 }
 
 // Script Properties helpers — ใช้ PropertiesService ของ project นี้
