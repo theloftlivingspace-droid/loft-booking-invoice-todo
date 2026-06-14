@@ -29,13 +29,44 @@ const PROP_KEY_INVOICE_SEEN = 'invoice_seen_v1';
 
 /* ============================================================
  *  Web app entry point
+ *  GET ?action=getData        → JSON API (for Vercel/React)
+ *  GET ?action=setBookingDone&id=X&done=true  → JSON
+ *  GET ?action=setInvoiceDone&id=X&done=true  → JSON
+ *  GET (no action)            → serve HTML webapp
  * ============================================================ */
 function doGet(e) {
+  const action = e && e.parameter && e.parameter.action;
+
+  if (action === 'getData') {
+    return jsonResponse_(getDashboardData());
+  }
+
+  if (action === 'setBookingDone') {
+    const id   = e.parameter.id   || '';
+    const done = e.parameter.done === 'true';
+    setBookingDone(id, done);
+    return jsonResponse_({ ok: true });
+  }
+
+  if (action === 'setInvoiceDone') {
+    const id   = e.parameter.id   || '';
+    const done = e.parameter.done === 'true';
+    setInvoiceDone(id, done);
+    return jsonResponse_({ ok: true });
+  }
+
+  // Default: serve HTML webapp
   const template = HtmlService.createTemplateFromFile('Index');
   return template.evaluate()
     .setTitle('The Loft — Booking & Invoice To-Do')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+function jsonResponse_(data) {
+  const output = ContentService.createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+  return output;
 }
 
 /* ============================================================
