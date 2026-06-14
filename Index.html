@@ -251,7 +251,7 @@
               '<span class="chip">' + esc(item.channel) + '</span>' +
               '<span class="chip">' + esc(item.resId) + '</span>' +
               (item.isNewToday ? '<span class="chip flag-new">ใหม่วันนี้ ✅</span>' : '') +
-              '<button class="btn-link ' + (hasMat ? 'has-match' : '') + '" onclick="jumpToInvoice(' + JSON.stringify(jk) + ')">' +
+              '<button class="btn-link ' + (hasMat ? 'has-match' : '') + '" data-jkey="' + esc(jk) + '" onclick="jumpToInvoice(this.dataset.jkey)">' +
                 (hasMat ? '🧾 ดู Invoice' : '🧾 ไม่มี Invoice') +
               '</button>' +
             '</div>' +
@@ -303,7 +303,7 @@
               splitChip + netChip +
               '<span class="chip">ตรวจพบ ' + esc(item.detectedDate) + '</span>' +
               (item.detectedToday ? '<span class="chip flag-new">ตรวจพบวันนี้ ✅</span>' : '') +
-              '<button class="btn-link ' + (hasMat ? 'has-match' : '') + '" onclick="jumpToBooking(' + JSON.stringify(jk) + ')">' +
+              '<button class="btn-link ' + (hasMat ? 'has-match' : '') + '" data-jkey="' + esc(jk) + '" onclick="jumpToBooking(this.dataset.jkey)">' +
                 (hasMat ? '📅 ดู Booking' : '📅 ไม่มี Booking') +
               '</button>' +
             '</div>' +
