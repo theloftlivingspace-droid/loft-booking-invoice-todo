@@ -216,7 +216,7 @@
           '<div class="card-body">' +
             '<div class="card-title">' +
               esc(item.room) + ' — ' + esc(item.guest) +
-              '<button class="btn-copy" onclick="copyText(\'' + esc(item.guest).replace(/'/g,"&#39;") + '\', this)" title="Copy ชื่อแขก">📋</button>' +
+              '<button class="btn-copy" onclick="copyText(\'' + (esc(item.guest) + \' / \' + esc(item.channel)).replace(/\'/g,"&#39;") + '\', this)" title="Copy ชื่อแขก + OTA">📋</button>' +
             '</div>' +
             '<div class="card-sub">' + esc(item.checkin) + ' → ' + esc(item.checkout) +
               (item.note ? ' • ' + esc(item.note) : '') + '</div>' +
