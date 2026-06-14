@@ -372,7 +372,7 @@ function testGithubToken() {
  */
 function pushToGithub() {
   const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
-  if (!token) throw new Error('ไม่พบ GITHUB_TOKEN — รัน setupGithubToken() ก่อน');
+  if (!token) throw new Error('ไม่พบ GITHUB_TOKEN — ใส่ใน Script Properties ก่อน');
 
   const REPO = 'theloftlivingspace-droid/loft-booking-invoice-todo';
   const BRANCH = 'main';
@@ -383,27 +383,41 @@ function pushToGithub() {
     'User-Agent': 'Apps-Script-Pusher'
   };
 
-  // ดึง source files จาก Apps Script project นี้
-  const scriptId = ScriptApp.getScriptId();
-  const oauthToken = ScriptApp.getOAuthToken();
-  const srcRes = UrlFetchApp.fetch(
-    'https://script.googleapis.com/v1/projects/' + scriptId + '/content',
-    { headers: { Authorization: 'Bearer ' + oauthToken } }
-  );
-  const srcJson = JSON.parse(srcRes.getContentText());
-  const files = srcJson.files || [];
+  function ghFetch(method, path, data) {
+    const res = UrlFetchApp.fetch(API + path, {
+      method: method,
+      headers: headers,
+      payload: data ? JSON.stringify(data) : undefined,
+      muteHttpExceptions: true
+    });
+    const json = JSON.parse(res.getContentText());
+    if (res.getResponseCode() >= 400) throw new Error(path + ': ' + JSON.stringify(json).slice(0, 200));
+    return json;
+  }
 
-  // สร้าง blob สำหรับแต่ละไฟล์
+  function makeBlob(content) {
+    const encoded = Utilities.base64Encode(Utilities.newBlob(content, 'text/plain', 'f').getBytes());
+    return ghFetch('post', '/repos/' + REPO + '/git/blobs', { content: encoded, encoding: 'base64' }).sha;
+  }
+
+  // Export project as JSON via Drive API
+  const scriptId = ScriptApp.getScriptId();
+  const exportUrl = 'https://www.googleapis.com/drive/v3/files/' + scriptId + '/export?mimeType=application/vnd.google-apps.script%2Bjson';
+  const exportRes = UrlFetchApp.fetch(exportUrl, {
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true
+  });
+  if (exportRes.getResponseCode() !== 200) throw new Error('Export failed: ' + exportRes.getContentText().slice(0, 200));
+
+  const files = JSON.parse(exportRes.getContentText()).files || [];
   const treeItems = files
-    .filter(f => f.type === 'SERVER_JS' || f.type === 'HTML')
+    .filter(f => ['server_js','html','json'].includes(f.type))
     .map(f => {
-      const ext = f.type === 'HTML' ? '.html' : '.gs';
-      const path = f.name + ext;
-      const blobRes = UrlFetchApp.fetch(API + '/repos/' + REPO + '/git/blobs', {
-        method: 'post',
-        headers: headers,
-        payload: JSON.stringify({ content: f.source, encoding: 'utf-8' })
-      });
+      const path = f.name === 'appsscript' ? 'appsscript.json' : f.name + (f.type === 'html' ? '.html' : f.type === 'json' ? '.json' : '.gs');
+      const sha = makeBlob(f.source);
+      Logger.log('📄 ' + path + ' → ' + sha.slice(0,8));
+      return { path: path, mode: '100644', type: 'blob', sha: sha };
+    });
       const blobSha = JSON.parse(blobRes.getContentText()).sha;
       Logger.log('📄 ' + path + ' → ' + blobSha);
       return { path: path, mode: '100644', type: 'blob', sha: blobSha };
