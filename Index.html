@@ -309,8 +309,24 @@
       }
     }
 
+    function clipboardWrite(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text);
+      }
+      return new Promise((resolve, reject) => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus(); ta.select();
+        try { document.execCommand('copy') ? resolve() : reject(); }
+        catch(e) { reject(e); }
+        finally { document.body.removeChild(ta); }
+      });
+    }
+
     function copyNetNum(numStr, btn) {
-      navigator.clipboard.writeText(numStr).then(() => {
+      clipboardWrite(numStr).then(() => {
         btn.textContent = '✅'; btn.classList.add('copied');
         showToast('คัดลอกแล้ว: ' + numStr);
         setTimeout(() => { btn.textContent = '⎘'; btn.classList.remove('copied'); }, 2000);
@@ -318,7 +334,7 @@
     }
 
     function copyText(text, btn) {
-      navigator.clipboard.writeText(text).then(() => {
+      clipboardWrite(text).then(() => {
         btn.textContent = '✅'; btn.classList.add('copied');
         showToast('คัดลอกแล้ว: ' + text);
         setTimeout(() => { btn.textContent = '📋'; btn.classList.remove('copied'); }, 2000);
