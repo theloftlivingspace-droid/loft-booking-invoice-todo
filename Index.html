@@ -356,11 +356,19 @@
     }
 
     function copyNetNum(numStr, btn) {
-      showCopyModal(numStr);
+      copyToClipboard(numStr);
     }
 
     function copyText(text, btn) {
-      showCopyModal(text);
+      copyToClipboard(text);
+    }
+
+    function copyToClipboard(text) {
+      navigator.clipboard.writeText(text).then(() => {
+        showToast('"' + text + '" คัดลอกแล้ว');
+      }).catch(() => {
+        showToast('ไม่สามารถคัดลอกได้');
+      });
     }
 
     function showToast(msg) {
