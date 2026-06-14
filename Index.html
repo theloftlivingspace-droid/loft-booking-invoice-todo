@@ -99,6 +99,7 @@
       font-size: 13px; opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 999;
     }
     .toast.show { opacity: 1; }
+    .match-score { font-size: 10px; color: #999; margin-left: 2px; }
   </style>
 </head>
 <body>
@@ -125,7 +126,7 @@
     <div class="panel" id="panel-invoice">
       <div class="toolbar">
         <span id="invoiceSummary"></span>
-        <button class="toggle-done" onclick="toggleShowDone('invoice')">แสดง/ซ่อนรายการที่ทำแล้ว</button>
+        <button class="toggle-done" onclick="toggleShowDone('invoice')" >แสดง/ซ่อนรายการที่ทำแล้ว</button>
       </div>
       <div id="invoiceList" class="loading">กำลังโหลดข้อมูล...</div>
     </div>
@@ -161,34 +162,25 @@
     function render() { renderBooking(); renderInvoice(); }
 
     // ============================================================
-    // Multi-key matching:
-    //  1. confCode (HM code from Payout Conf. Code vs ResId in Sheet1 if present)
-    //  2. firstName + checkin
-    //  3. checkin + room
+    // Multi-key matching v2:
+    //  matchKeys = array of "n:{namePart}|{date}" and "cr:{date}|{room}"
+    //  สร้างจาก makeMatchKeys_ ใน Code.gs (±2 วัน, all name words ≥3 chars)
     // ============================================================
 
-    function buildMatchSets(items) {
-      const byConf = new Set();
-      const byFirstCheckin = new Set();
-      const byCheckinRoom = new Set();
-      items.forEach(x => {
-        if (x.confCode) byConf.add(x.confCode);
-        if (x.firstCheckinKey) byFirstCheckin.add(x.firstCheckinKey);
-        if (x.checkinRoomKey) byCheckinRoom.add(x.checkinRoomKey);
-      });
-      return { byConf, byFirstCheckin, byCheckinRoom };
+    function buildKeySet(items) {
+      const set = new Set();
+      items.forEach(x => (x.matchKeys || []).forEach(k => set.add(k)));
+      return set;
     }
 
-    function hasMatch(item, sets) {
-      if (item.confCode && sets.byConf.has(item.confCode)) return true;
-      if (item.firstCheckinKey && sets.byFirstCheckin.has(item.firstCheckinKey)) return true;
-      if (item.checkinRoomKey && sets.byCheckinRoom.has(item.checkinRoomKey)) return true;
-      return false;
+    function hasMatch(item, keySet) {
+      return (item.matchKeys || []).some(k => keySet.has(k));
     }
 
+    // jumpKey: prefer name+date key that's most specific (first 'n:' key)
     function jumpKey(item) {
-      // prefer firstCheckinKey as jump anchor (most reliable cross-sheet)
-      return item.firstCheckinKey || item.confCode || '';
+      const nk = (item.matchKeys || []).find(k => k.startsWith('n:'));
+      return nk || (item.matchKeys || [])[0] || '';
     }
 
     function renderBooking() {
@@ -200,7 +192,7 @@
       document.getElementById('bookingSummary').textContent =
         'ทั้งหมด ' + list.length + ' รายการ • ค้างเพิ่ม ' + pending + ' • ใหม่วันนี้ ' + newCount;
 
-      const invSets = buildMatchSets(DATA.invoice);
+      const invKeySet = buildKeySet(DATA.invoice);
       const visible = list.filter(x => showDone.booking || !x.done);
       if (!visible.length) { container.innerHTML = '<div class="empty">ไม่มีรายการ</div>'; return; }
 
@@ -208,15 +200,18 @@
         const cls = ['card'];
         if (item.isNewToday) cls.push('is-new');
         if (item.done) cls.push('is-done');
-        const hasMat = hasMatch(item, invSets);
+        const hasMat = hasMatch(item, invKeySet);
         const jk = jumpKey(item);
+
+        // Copy text = "ชื่อแขก / Channel" (e.g. "John Smith / Airbnb")
+        const copyVal = item.guest + ' / ' + (item.channel || 'Unknown');
 
         return '<div class="' + cls.join(' ') + '" data-bjkey="' + esc(jk) + '">' +
           '<input type="checkbox" class="booking-check" data-resid="' + esc(item.resId) + '" ' + (item.done ? 'checked' : '') + '>' +
           '<div class="card-body">' +
             '<div class="card-title">' +
               esc(item.room) + ' — ' + esc(item.guest) +
-              '<button class="btn-copy" onclick="copyText(\'' + (esc(item.guest) + \' / \' + esc(item.channel)).replace(/\'/g,"&#39;") + '\', this)" title="Copy ชื่อแขก + OTA">📋</button>' +
+              '<button class="btn-copy" onclick="copyText(' + JSON.stringify(copyVal) + ', this)" title="Copy ชื่อแขก / OTA">📋</button>' +
             '</div>' +
             '<div class="card-sub">' + esc(item.checkin) + ' → ' + esc(item.checkout) +
               (item.note ? ' • ' + esc(item.note) : '') + '</div>' +
@@ -224,7 +219,7 @@
               '<span class="chip">' + esc(item.channel) + '</span>' +
               '<span class="chip">' + esc(item.resId) + '</span>' +
               (item.isNewToday ? '<span class="chip flag-new">ใหม่วันนี้ ✅</span>' : '') +
-              '<button class="btn-link ' + (hasMat ? 'has-match' : '') + '" onclick="jumpToInvoice(\'' + esc(jk).replace(/'/g,"&#39;") + '\')">' +
+              '<button class="btn-link ' + (hasMat ? 'has-match' : '') + '" onclick="jumpToInvoice(' + JSON.stringify(jk) + ')">' +
                 (hasMat ? '🧾 ดู Invoice' : '🧾 ไม่มี Invoice') +
               '</button>' +
             '</div>' +
@@ -242,7 +237,7 @@
       document.getElementById('invoiceSummary').textContent =
         'ทั้งหมด ' + list.length + ' รายการ • ค้างออกบิล ' + pending + ' • ตรวจพบวันนี้ ' + newCount;
 
-      const bkSets = buildMatchSets(DATA.booking);
+      const bkKeySet = buildKeySet(DATA.booking);
       const visible = list.filter(x => showDone.invoice || !x.done);
       if (!visible.length) { container.innerHTML = '<div class="empty">ไม่มีรายการ</div>'; return; }
 
@@ -250,7 +245,7 @@
         const cls = ['card'];
         if (item.detectedToday) cls.push('is-new');
         if (item.done) cls.push('is-done');
-        const hasMat = hasMatch(item, bkSets);
+        const hasMat = hasMatch(item, bkKeySet);
         const jk = jumpKey(item);
 
         const netNum = formatNum(item.net);
@@ -273,11 +268,10 @@
               (item.nights ? ' (' + esc(item.nights) + ' คืน)' : '') + '</div>' +
             '<div class="card-meta">' +
               '<span class="chip">' + esc(item.ota) + '</span>' +
-              splitChip +
-              netChip +
+              splitChip + netChip +
               '<span class="chip">ตรวจพบ ' + esc(item.detectedDate) + '</span>' +
               (item.detectedToday ? '<span class="chip flag-new">ตรวจพบวันนี้ ✅</span>' : '') +
-              '<button class="btn-link ' + (hasMat ? 'has-match' : '') + '" onclick="jumpToBooking(\'' + esc(jk).replace(/'/g,"&#39;") + '\')">' +
+              '<button class="btn-link ' + (hasMat ? 'has-match' : '') + '" onclick="jumpToBooking(' + JSON.stringify(jk) + ')">' +
                 (hasMat ? '📅 ดู Booking' : '📅 ไม่มี Booking') +
               '</button>' +
             '</div>' +
@@ -317,8 +311,7 @@
 
     function copyNetNum(numStr, btn) {
       navigator.clipboard.writeText(numStr).then(() => {
-        btn.textContent = '✅';
-        btn.classList.add('copied');
+        btn.textContent = '✅'; btn.classList.add('copied');
         showToast('คัดลอกแล้ว: ' + numStr);
         setTimeout(() => { btn.textContent = '⎘'; btn.classList.remove('copied'); }, 2000);
       }).catch(() => showToast('ไม่สามารถคัดลอกได้'));
@@ -326,8 +319,7 @@
 
     function copyText(text, btn) {
       navigator.clipboard.writeText(text).then(() => {
-        btn.textContent = '✅';
-        btn.classList.add('copied');
+        btn.textContent = '✅'; btn.classList.add('copied');
         showToast('คัดลอกแล้ว: ' + text);
         setTimeout(() => { btn.textContent = '📋'; btn.classList.remove('copied'); }, 2000);
       }).catch(() => showToast('ไม่สามารถคัดลอกได้'));
@@ -335,8 +327,7 @@
 
     function showToast(msg) {
       const t = document.getElementById('toast');
-      t.textContent = msg;
-      t.classList.add('show');
+      t.textContent = msg; t.classList.add('show');
       setTimeout(() => t.classList.remove('show'), 2500);
     }
 
@@ -346,8 +337,7 @@
         .withSuccessHandler(() => {
           const item = DATA.booking.find(x => x.resId === resId);
           if (item) item.done = checked;
-          el.disabled = false;
-          renderBooking();
+          el.disabled = false; renderBooking();
         })
         .withFailureHandler(() => { el.checked = !checked; el.disabled = false; })
         .setBookingDone(resId, checked);
@@ -359,8 +349,7 @@
         .withSuccessHandler(() => {
           const item = DATA.invoice.find(x => x.invoiceKey === invoiceKey);
           if (item) item.done = checked;
-          el.disabled = false;
-          renderInvoice();
+          el.disabled = false; renderInvoice();
         })
         .withFailureHandler(() => { el.checked = !checked; el.disabled = false; })
         .setInvoiceDone(invoiceKey, checked);
