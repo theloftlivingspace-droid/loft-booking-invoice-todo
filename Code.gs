@@ -190,21 +190,44 @@ function getInvoiceToCreate_(ss, todayStr) {
     const firstGuest    = rawGuestField.split(',')[0].trim();
     const firstConfCode = rawConfCode.split(',')[0].trim();
 
-    // ✅ subPattern: รองรับทั้ง format เดิม "NET ฿2638.54"
-    //    และ format merged "NET ฿81.17+฿2638.54=฿2719.71" (split payout conf เดียวกัน)
-    const subPattern = /([^|]+?)\(([^)]+)\)\s*NET\s+฿([\d,]+(?:\.\d+)?(?:[+฿\d,.]*=฿([\d,]+\.?\d*))?)/g;
+    // subPattern: parse ทุก "Guest(conf) NET ฿amount" entry จาก notes
+    // รองรับทั้ง format: "NET ฿2638.54" และ merged "NET ฿81.17+฿2638.54=฿2719.71"
+    const subPattern = /([^|]+?)\(([^)]+)\)\s*NET\s+฿([\d,]+\.?\d*)/g;
     const subs = [];
     let m;
     while ((m = subPattern.exec(notes)) !== null) {
-      // m[4] = ยอดหลัง = (summed total) ถ้ามี, ไม่งั้นใช้ m[3]
-      const netVal = m[4] ? parseFloat(m[4].replace(/,/g,'')) : parseFloat(m[3].replace(/,/g,''));
-      subs.push({ guest: m[1].trim(), confCode: m[2], net: netVal });
+      subs.push({ guest: m[1].trim(), confCode: m[2], net: parseFloat(m[3].replace(/,/g,'')) });
+    }
+    // ถ้า notes มี merged format "฿81.17+฿2638.54=฿2719.71" ให้แตกแต่ละยอดย่อย
+    if (subs.length === 1 && notes.includes('+')) {
+      const mergedPattern = /([^|]+?)\(([^)]+)\)\s*NET\s+(฿[\d,]+(?:\.\d+)?(?:\+฿[\d,]+(?:\.\d+))*)/g;
+      let mm;
+      while ((mm = mergedPattern.exec(notes)) !== null) {
+        const conf = mm[2];
+        const guest = mm[1].trim();
+        const parts = mm[3].split('+').map(p => parseFloat(p.replace(/฿|,/g,''))).filter(v => !isNaN(v));
+        if (parts.length > 1) {
+          subs.length = 0; // reset
+          parts.forEach((net, pi) => subs.push({ guest, confCode: conf, net }));
+        }
+      }
     }
 
-    const entries = subs.length > 1 ? subs : [{ guest: firstGuest, confCode: firstConfCode, net: totalNet }];
+    const entries = subs.length > 0 ? subs : [{ guest: firstGuest, confCode: firstConfCode, net: totalNet }];
+
+    // invoiceKey: ถ้ามีหลาย entries ต้องต่างกัน
+    // ถ้า conf ซ้ำ (เช่น Nihel 2 ยอด) ใช้ index กำกับ
+    const confCount = {};
+    entries.forEach(e => { confCount[e.confCode] = (confCount[e.confCode] || 0) + 1; });
+    const confIdx = {};
 
     entries.forEach((entry, i) => {
-      const invoiceKey = entries.length > 1 ? bookingId + '#' + (entry.confCode || i) : bookingId;
+      const hasDupeConf = confCount[entry.confCode] > 1;
+      const ci2 = confIdx[entry.confCode] = (confIdx[entry.confCode] || 0);
+      confIdx[entry.confCode]++;
+      const invoiceKey = entries.length > 1
+        ? bookingId + '#' + entry.confCode + (hasDupeConf ? '#' + ci2 : '')
+        : bookingId;
       let firstSeen = seenMap[invoiceKey];
       let isNewSeen = false;
       if (!firstSeen) {
