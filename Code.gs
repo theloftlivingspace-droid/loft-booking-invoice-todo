@@ -20,6 +20,9 @@ const PAYOUT_STATUSES_FOR_INVOICE = [
   'โอนแล้ว',
   'โอนแล้ว (Resolution Payout)',
   '✅ Matched - Airbnb payout',
+  '✅ Matched - Booking.com remittance',
+  '✅ Matched - Expedia remittance',
+  '✅ Matched - Trip.com settlement',
 ];
 
 const PROP_KEY_BOOKING_DONE = 'booking_done_v1';
