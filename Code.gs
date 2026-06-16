@@ -147,13 +147,24 @@ function getInvoiceToCreate_(ss, todayStr) {
     }
   });
 
+  // Build set of bookingIds that have a summary row (Conf. Code contains comma)
+  const summaryBookingIds = new Set();
+  rows.forEach(r => {
+    const confCode  = String(r[idx['Conf. Code']] || '').trim();
+    const bookingId = String(r[idx['Booking ID']] || '').trim();
+    if (confCode.includes(',') && bookingId) summaryBookingIds.add(bookingId);
+  });
+
   const filtered = rows.filter(r => {
-    const status   = String(r[idx.สถานะ] || '').trim();
-    const confCode = String(r[idx['Conf. Code']] || '').trim();
-    const note     = String(r[idx.หมายเหตุ] || '').trim();
+    const status    = String(r[idx.สถานะ] || '').trim();
+    const confCode  = String(r[idx['Conf. Code']] || '').trim();
+    const note      = String(r[idx.หมายเหตุ] || '').trim();
+    const bookingId = String(r[idx['Booking ID']] || '').trim();
     if (note.startsWith('↳')) return false;
     if (!PAYOUT_STATUSES_FOR_INVOICE.includes(status)) return false;
     if (!status.includes('Matched') && matchedConfCodes.has(confCode)) return false;
+    // Skip single-conf sub-rows when a multi-conf summary row exists for same bookingId
+    if (!confCode.includes(',') && summaryBookingIds.has(bookingId)) return false;
     return true;
   });
 
