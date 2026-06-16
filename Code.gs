@@ -190,11 +190,15 @@ function getInvoiceToCreate_(ss, todayStr) {
     const firstGuest    = rawGuestField.split(',')[0].trim();
     const firstConfCode = rawConfCode.split(',')[0].trim();
 
-    const subPattern = /([^|]+?)\(([^)]+)\)\s*NET\s+฿([\d,]+\.?\d*)/g;
+    // ✅ subPattern: รองรับทั้ง format เดิม "NET ฿2638.54"
+    //    และ format merged "NET ฿81.17+฿2638.54=฿2719.71" (split payout conf เดียวกัน)
+    const subPattern = /([^|]+?)\(([^)]+)\)\s*NET\s+฿([\d,]+(?:\.\d+)?(?:[+฿\d,.]*=฿([\d,]+\.?\d*))?)/g;
     const subs = [];
     let m;
     while ((m = subPattern.exec(notes)) !== null) {
-      subs.push({ guest: m[1].trim(), confCode: m[2], net: parseFloat(m[3].replace(/,/g, '')) });
+      // m[4] = ยอดหลัง = (summed total) ถ้ามี, ไม่งั้นใช้ m[3]
+      const netVal = m[4] ? parseFloat(m[4].replace(/,/g,'')) : parseFloat(m[3].replace(/,/g,''));
+      subs.push({ guest: m[1].trim(), confCode: m[2], net: netVal });
     }
 
     const entries = subs.length > 1 ? subs : [{ guest: firstGuest, confCode: firstConfCode, net: totalNet }];
