@@ -190,33 +190,18 @@ function getInvoiceToCreate_(ss, todayStr) {
     const firstGuest    = rawGuestField.split(',')[0].trim();
     const firstConfCode = rawConfCode.split(',')[0].trim();
 
-    // subPattern: parse ทุก "Guest(conf) NET ฿amount" entry จาก notes
-    // รองรับทั้ง format: "NET ฿2638.54" และ merged "NET ฿81.17+฿2638.54=฿2719.71"
+    // parse ทุก "Guest(conf) NET ฿amount" entry จาก notes
+    // ทุก case: conf เดียว, conf ต่างกัน, conf ซ้ำ (split payout เช่น Nihel 81.17 + 2638.54)
     const subPattern = /([^|]+?)\(([^)]+)\)\s*NET\s+฿([\d,]+\.?\d*)/g;
     const subs = [];
     let m;
     while ((m = subPattern.exec(notes)) !== null) {
-      subs.push({ guest: m[1].trim(), confCode: m[2], net: parseFloat(m[3].replace(/,/g,'')) });
-    }
-    // ถ้า notes มี merged format "฿81.17+฿2638.54=฿2719.71" ให้แตกแต่ละยอดย่อย
-    if (subs.length === 1 && notes.includes('+')) {
-      const mergedPattern = /([^|]+?)\(([^)]+)\)\s*NET\s+(฿[\d,]+(?:\.\d+)?(?:\+฿[\d,]+(?:\.\d+))*)/g;
-      let mm;
-      while ((mm = mergedPattern.exec(notes)) !== null) {
-        const conf = mm[2];
-        const guest = mm[1].trim();
-        const parts = mm[3].split('+').map(p => parseFloat(p.replace(/฿|,/g,''))).filter(v => !isNaN(v));
-        if (parts.length > 1) {
-          subs.length = 0; // reset
-          parts.forEach((net, pi) => subs.push({ guest, confCode: conf, net }));
-        }
-      }
+      subs.push({ guest: m[1].trim(), confCode: m[2].trim(), net: parseFloat(m[3].replace(/,/g,'')) });
     }
 
     const entries = subs.length > 0 ? subs : [{ guest: firstGuest, confCode: firstConfCode, net: totalNet }];
 
-    // invoiceKey: ถ้ามีหลาย entries ต้องต่างกัน
-    // ถ้า conf ซ้ำ (เช่น Nihel 2 ยอด) ใช้ index กำกับ
+    // invoiceKey: ถ้ามีหลาย entries และ conf ซ้ำ ใส่ index กำกับ (#0, #1)
     const confCount = {};
     entries.forEach(e => { confCount[e.confCode] = (confCount[e.confCode] || 0) + 1; });
     const confIdx = {};
