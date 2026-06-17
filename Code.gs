@@ -125,8 +125,25 @@ function getBookingToAdd_(ss, todayStr) {
   });
 
   if (seenChanged) setProp_(PROP_KEY_BOOKING_SEEN, seenMap);
-  out.reverse();
-  return out;
+
+  // Dedupe bookings that are the same stay parsed twice under different resIds
+  // (e.g. guest name parsed as "Sol Galmes Pons" vs "Galmes Pons, Sol" → two different resIds,
+  // same room + same checkin + same checkout). Keep the one with the earlier firstSeen
+  // (i.e. detected first), or alphabetically-first resId as a tiebreaker.
+  const dedupMap = {};
+  out.forEach(b => {
+    const dupKey = roomNum_(b.room) + '|' + b.checkin + '|' + b.checkout;
+    const existing = dedupMap[dupKey];
+    if (!existing) {
+      dedupMap[dupKey] = b;
+    } else if (b.firstSeen < existing.firstSeen || (b.firstSeen === existing.firstSeen && b.resId < existing.resId)) {
+      dedupMap[dupKey] = b;
+    }
+  });
+  const deduped = Object.values(dedupMap);
+
+  deduped.reverse();
+  return deduped;
 }
 
 function getInvoiceToCreate_(ss, todayStr) {
