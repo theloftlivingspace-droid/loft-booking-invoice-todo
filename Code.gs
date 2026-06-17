@@ -221,6 +221,16 @@ function getInvoiceToCreate_(ss, todayStr) {
 
     const entries = subs.length > 0 ? subs : [{ guest: firstGuest, confCode: firstConfCode, net: totalNet }];
 
+    // เมื่อมีหลาย entries (multi-guest ใน 1 payout) และ room field มีหลายห้อง (comma-separated)
+    // ให้จับคู่ room ตัวที่ i กับ entry ตัวที่ i ตามลำดับ ไม่ใช่ใช้ room ตัวรวมกับทุก entry
+    // (เดิม: ทุก entry ได้ room="203, 204" เหมือนกันหมด ทำให้ matchKeys ของ guest คนที่ 2
+    //  ดันมี key ของห้องคนแรกด้วย เกิด false-positive ข้ามห้อง)
+    const roomList = room.split(',').map(r => r.trim()).filter(Boolean);
+    function roomForEntry(i) {
+      if (entries.length > 1 && roomList.length === entries.length) return roomList[i];
+      return room; // fallback: single entry or room count doesn't match entry count
+    }
+
     // invoiceKey: ถ้ามีหลาย entries และ conf ซ้ำ ใส่ index กำกับ (#0, #1)
     const confCount = {};
     entries.forEach(e => { confCount[e.confCode] = (confCount[e.confCode] || 0) + 1; });
@@ -239,8 +249,9 @@ function getInvoiceToCreate_(ss, todayStr) {
         firstSeen = todayStr; seenMap[invoiceKey] = todayStr;
         seenChanged = true; isNewSeen = true;
       }
+      const entryRoom = roomForEntry(i);
       out.push({
-        invoiceKey, bookingId, room,
+        invoiceKey, bookingId, room: entryRoom,
         guest: entry.guest || firstGuest,
         checkin, checkout, nights,
         net: entries.length > 1 ? entry.net : totalNet,
@@ -252,7 +263,7 @@ function getInvoiceToCreate_(ss, todayStr) {
         detectedToday: detectedDate === todayStr,
         firstSeen, isNewInList: isNewSeen,
         done: !!doneMap[invoiceKey],
-        matchKeys: makeMatchKeys_(entry.guest || firstGuest, checkin, room),
+        matchKeys: makeMatchKeys_(entry.guest || firstGuest, checkin, entryRoom),
       });
     });
   });
