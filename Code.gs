@@ -491,9 +491,15 @@ function normalizeCode_(s) {
 
 function testGithubToken() {
   const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+  Logger.log('Token length: ' + (token ? token.length : 'null'));
+  Logger.log('Token first 10: ' + (token ? token.substring(0,10) : 'null'));
+  Logger.log('Token last 5: ' + (token ? token.substring(token.length-5) : 'null'));
+  Logger.log('Has whitespace: ' + (token ? /\s/.test(token) : 'null'));
   const res = UrlFetchApp.fetch('https://api.github.com/repos/theloftlivingspace-droid/loft-booking-invoice-todo', {
-    headers: { Authorization: 'token ' + token }
+    headers: { Authorization: 'token ' + token },
+    muteHttpExceptions: true
   });
+  Logger.log('Status: ' + res.getResponseCode());
   Logger.log(res.getContentText().slice(0, 300));
 }
 
