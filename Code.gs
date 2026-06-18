@@ -44,6 +44,10 @@ function doGet(e) {
     return jsonResponse_(getDashboardData());
   }
 
+  if (action === 'getRoomStatus') {
+    return jsonResponse_(getRoomStatus_());
+  }
+
   if (action === 'setBookingDone') {
     const id   = e.parameter.id   || '';
     const done = e.parameter.done === 'true';
@@ -284,6 +288,34 @@ function getInvoiceToCreate_(ss, todayStr) {
     return a.guest < b.guest ? -1 : 1;
   });
   return out;
+}
+
+/* ============================================================
+ *  Room status — full Sheet1 dump for Check-in/Out PMS view
+ *  (ไม่ filter/dedupe เหมือน getBookingToAdd_ เพราะ tab นี้ต้องเห็นทุก
+ *   stay ที่ checked-in อยู่ หรือกำลังจะเข้า ไม่ใช่แค่ booking ที่ยังไม่ add invoice)
+ * ============================================================ */
+function getRoomStatus_() {
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
+  if (!src) throw new Error('ไม่พบชีต: ' + SRC_BOOKING_SHEET);
+
+  const data = src.getDataRange().getValues();
+  const header = data[0];
+  const rows = data.slice(1).filter(r => r.join('').trim() !== '');
+  const idx = indexMap_(header, ['เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์', 'Channel', 'ResId', 'Note']);
+
+  const stays = rows.map(r => ({
+    room:     String(r[idx['เลขห้อง']] || '').trim(),
+    guest:    String(r[idx['ชื่อแขก']] || '').trim(),
+    checkin:  formatCellDate_(r[idx['เช็คอิน']]),
+    checkout: formatCellDate_(r[idx['เช็คเอาท์']]),
+    channel:  String(r[idx.Channel] || '').trim(),
+    resId:    String(r[idx.ResId] || '').trim(),
+    note:     String(r[idx.Note] || '').trim(),
+  })).filter(s => s.checkin && s.checkout);
+
+  return { today: formatDateYMD_(new Date()), stays };
 }
 
 /* ============================================================
