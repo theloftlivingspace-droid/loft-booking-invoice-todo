@@ -490,7 +490,7 @@ function normalizeCode_(s) {
 // ตั้งค่า GITHUB_TOKEN ผ่าน Project Settings → Script Properties โดยตรงเท่านั้น
 
 function testGithubToken() {
-  const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+  const token = PropertiesService.getScriptProperties().getProperty('GH_TOKEN_V2');
   Logger.log('Token length: ' + (token ? token.length : 'null'));
   Logger.log('Token first 10: ' + (token ? token.substring(0,10) : 'null'));
   Logger.log('Token last 5: ' + (token ? token.substring(token.length-5) : 'null'));
@@ -504,8 +504,8 @@ function testGithubToken() {
 }
 
 function pushToGithub() {
-  const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
-  if (!token) throw new Error('ไม่พบ GITHUB_TOKEN — ใส่ใน Script Properties ก่อน');
+  const token = PropertiesService.getScriptProperties().getProperty('GH_TOKEN_V2');
+  if (!token) throw new Error('ไม่พบ GH_TOKEN_V2 — ใส่ใน Script Properties ก่อน');
 
   const REPO = 'theloftlivingspace-droid/loft-booking-invoice-todo';
   const BRANCH = 'main';
