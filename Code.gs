@@ -150,6 +150,12 @@ function getInvoiceToCreate_(ss, todayStr) {
   const src = ss.getSheetByName(SRC_PAYOUT_SHEET);
   if (!src) throw new Error('ไม่พบชีต: ' + SRC_PAYOUT_SHEET);
 
+  // Build a lookup index of all bookings (name parts → list of {room, checkin}) from Sheet1.
+  // Used to resolve the REAL room of each guest in a multi-room invoice payout, since the
+  // "ห้อง" field in Payout_Income_Log only ever stores the combined room list (e.g. "108, 204, 300")
+  // for every guest in the payout, with no indication of who stayed in which room.
+  const bookingIndex_ = buildBookingLookupIndex_(ss);
+
   const data = src.getDataRange().getValues();
   const header = data[0];
   const rows = data.slice(1).filter(r => r.join('').trim() !== '');
@@ -222,13 +228,16 @@ function getInvoiceToCreate_(ss, todayStr) {
     const entries = subs.length > 0 ? subs : [{ guest: firstGuest, confCode: firstConfCode, net: totalNet }];
 
     // เมื่อมีหลาย entries (multi-guest ใน 1 payout) และ room field มีหลายห้อง (comma-separated)
-    // ให้จับคู่ room ตัวที่ i กับ entry ตัวที่ i ตามลำดับ ไม่ใช่ใช้ room ตัวรวมกับทุก entry
-    // (เดิม: ทุก entry ได้ room="203, 204" เหมือนกันหมด ทำให้ matchKeys ของ guest คนที่ 2
-    //  ดันมี key ของห้องคนแรกด้วย เกิด false-positive ข้ามห้อง)
+    // ห้ามเดาว่า room ตัวที่ i ตรงกับ entry ตัวที่ i ตามลำดับ — พบว่าลำดับใน room field
+    // ไม่ได้สัมพันธ์กับลำดับ guest ใน notes เสมอไป (บางครั้งตรง บางครั้งสลับ)
+    // วิธีที่แม่นยำกว่า: ค้นหา room จริงของ guest นั้นจาก booking sheet (Sheet1) โดยตรง
+    // ด้วยชื่อ + checkin ใกล้เคียง (±3 วัน) ถ้าหาไม่เจอ fallback เป็น roomList ทั้งหมด
+    // (กว้างกว่าเดิม แต่ยังดีกว่าเดาผิด)
     const roomList = room.split(',').map(r => r.trim()).filter(Boolean);
-    function roomForEntry(i) {
-      if (entries.length > 1 && roomList.length === entries.length) return roomList[i];
-      return room; // fallback: single entry or room count doesn't match entry count
+    function findRoomForGuest(guestName) {
+      const found = lookupRoomFromIndex_(bookingIndex_, guestName, checkin, roomList);
+      if (found) return found;
+      return room; // fallback: couldn't resolve — use combined room string (still better than wrong room)
     }
 
     // invoiceKey: ถ้ามีหลาย entries และ conf ซ้ำ ใส่ index กำกับ (#0, #1)
@@ -249,10 +258,11 @@ function getInvoiceToCreate_(ss, todayStr) {
         firstSeen = todayStr; seenMap[invoiceKey] = todayStr;
         seenChanged = true; isNewSeen = true;
       }
-      const entryRoom = roomForEntry(i);
+      const entryGuest = entry.guest || firstGuest;
+      const entryRoom = (entries.length > 1 && roomList.length > 1) ? findRoomForGuest(entryGuest) : room;
       out.push({
         invoiceKey, bookingId, room: entryRoom,
-        guest: entry.guest || firstGuest,
+        guest: entryGuest,
         checkin, checkout, nights,
         net: entries.length > 1 ? entry.net : totalNet,
         isSplitFromMulti: entries.length > 1,
@@ -263,7 +273,7 @@ function getInvoiceToCreate_(ss, todayStr) {
         detectedToday: detectedDate === todayStr,
         firstSeen, isNewInList: isNewSeen,
         done: !!doneMap[invoiceKey],
-        matchKeys: makeMatchKeys_(entry.guest || firstGuest, checkin, entryRoom),
+        matchKeys: makeMatchKeys_(entryGuest, checkin, entryRoom),
       });
     });
   });
@@ -274,6 +284,69 @@ function getInvoiceToCreate_(ss, todayStr) {
     return a.guest < b.guest ? -1 : 1;
   });
   return out;
+}
+
+/* ============================================================
+ *  Booking lookup index — resolves real room for multi-room invoices
+ * ------------------------------------------------------------
+ *  Payout_Income_Log stores one combined "ห้อง" field (e.g. "108, 204, 300")
+ *  for ALL guests in a multi-room payout — there's no per-guest room data there.
+ *  To resolve which guest stayed in which room, we look up the REAL booking
+ *  record from Sheet1 by name + checkin proximity, restricted to rooms that
+ *  are actually listed in this invoice's room field (extra safety net).
+ * ============================================================ */
+function buildBookingLookupIndex_(ss) {
+  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
+  if (!src) return {};
+  const data = src.getDataRange().getValues();
+  const header = data[0];
+  const rows = data.slice(1).filter(r => r.join('').trim() !== '');
+  const idx = indexMap_(header, ['เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์']);
+
+  const index = {}; // namePart -> [{room, checkin}]
+  rows.forEach(r => {
+    const guest = String(r[idx['ชื่อแขก']] || '').trim();
+    const room  = String(r[idx['เลขห้อง']] || '').trim();
+    const rn    = roomNum_(room);
+    const checkin = formatCellDate_(r[idx['เช็คอิน']]);
+    if (!rn || !checkin) return;
+    allNameParts_(guest).forEach(p => {
+      if (!index[p]) index[p] = [];
+      index[p].push({ room: rn, checkin });
+    });
+  });
+  return index;
+}
+
+function lookupRoomFromIndex_(index, guestName, invoiceCheckin, allowedRoomList) {
+  const parts = allNameParts_(guestName);
+  const allowedNums = allowedRoomList.map(roomNum_).filter(Boolean);
+  let best = null, bestDist = Infinity;
+
+  parts.forEach(p => {
+    const candidates = index[p] || [];
+    candidates.forEach(c => {
+      // Only consider rooms that are actually part of this invoice's room list —
+      // never assign a room the invoice didn't even mention.
+      if (allowedNums.length && allowedNums.indexOf(c.room) === -1) return;
+      const dist = Math.abs(daysDiff_(invoiceCheckin, c.checkin));
+      if (dist <= 3 && dist < bestDist) {
+        bestDist = dist;
+        best = c.room;
+      }
+    });
+  });
+  return best;
+}
+
+function daysDiff_(a, b) {
+  try {
+    const da = new Date(a + 'T00:00:00Z');
+    const db = new Date(b + 'T00:00:00Z');
+    return (da.getTime() - db.getTime()) / 86400000;
+  } catch (e) {
+    return 999;
+  }
 }
 
 /* ============================================================
@@ -301,8 +374,12 @@ function makeMatchKeys_(guest, checkin, room) {
 function allNameParts_(raw) {
   raw = String(raw || '').trim();
   return raw.split(/[\s,\/\\]+/)
-    .map(p => p.toLowerCase().replace(/[^a-z0-9ก-๙]/g, ''))
-    .filter(p => p.length >= 3);
+    .map(p => p.toLowerCase().replace(/[^a-z0-9ก-๙\u4e00-\u9fff\u3400-\u4dbf]/g, ''))
+    .filter(p => {
+      if (!p) return false;
+      const isCjk = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(p);
+      return isCjk ? p.length >= 2 : p.length >= 3;
+    });
 }
 
 function roomNum_(room) {
