@@ -485,10 +485,9 @@ function normalizeCode_(s) {
 /* ============================================================
  *  GitHub integration helpers
  * ============================================================ */
-function setupGithubToken() {
-  PropertiesService.getScriptProperties().setProperty('GITHUB_TOKEN', 'PASTE_YOUR_TOKEN_HERE');
-  Logger.log('✅ GITHUB_TOKEN set');
-}
+// setupGithubToken() ถูกลบออกแล้ว — ฟังก์ชันนี้เขียนทับ GITHUB_TOKEN ด้วย placeholder
+// string ทุกครั้งที่ถูกรัน (โดยตั้งใจหรือไม่ตั้งใจ) ทำให้ token จริงที่ตั้งไว้หายไป
+// ตั้งค่า GITHUB_TOKEN ผ่าน Project Settings → Script Properties โดยตรงเท่านั้น
 
 function testGithubToken() {
   const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
