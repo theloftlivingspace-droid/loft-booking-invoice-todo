@@ -20,6 +20,9 @@ const PAYOUT_STATUSES_FOR_INVOICE = [
   'โอนแล้ว',
   'โอนแล้ว (Resolution Payout)',
   '✅ Matched - Airbnb payout',
+  '✅ Matched - Booking.com remittance',
+  '✅ Matched - Expedia remittance',
+  '✅ Matched - Trip.com settlement',
 ];
 
 const PROP_KEY_BOOKING_DONE = 'booking_done_v1';
@@ -39,6 +42,10 @@ function doGet(e) {
 
   if (action === 'getData') {
     return jsonResponse_(getDashboardData());
+  }
+
+  if (action === 'getRoomStatus') {
+    return jsonResponse_(getRoomStatus_());
   }
 
   if (action === 'setBookingDone') {
@@ -117,18 +124,41 @@ function getBookingToAdd_(ss, todayStr) {
       note: String(r[idx.Note] || ''),
       firstSeen, isNewToday,
       done: !!doneMap[resId],
-      matchKeys: makeMatchKeys_(guest, checkin, room, resId),
+      matchKeys: makeMatchKeys_(guest, checkin, room),
     };
   });
 
   if (seenChanged) setProp_(PROP_KEY_BOOKING_SEEN, seenMap);
-  out.reverse();
-  return out;
+
+  // Dedupe bookings that are the same stay parsed twice under different resIds
+  // (e.g. guest name parsed as "Sol Galmes Pons" vs "Galmes Pons, Sol" → two different resIds,
+  // same room + same checkin + same checkout). Keep the one with the earlier firstSeen
+  // (i.e. detected first), or alphabetically-first resId as a tiebreaker.
+  const dedupMap = {};
+  out.forEach(b => {
+    const dupKey = roomNum_(b.room) + '|' + b.checkin + '|' + b.checkout;
+    const existing = dedupMap[dupKey];
+    if (!existing) {
+      dedupMap[dupKey] = b;
+    } else if (b.firstSeen < existing.firstSeen || (b.firstSeen === existing.firstSeen && b.resId < existing.resId)) {
+      dedupMap[dupKey] = b;
+    }
+  });
+  const deduped = Object.values(dedupMap);
+
+  deduped.reverse();
+  return deduped;
 }
 
 function getInvoiceToCreate_(ss, todayStr) {
   const src = ss.getSheetByName(SRC_PAYOUT_SHEET);
   if (!src) throw new Error('ไม่พบชีต: ' + SRC_PAYOUT_SHEET);
+
+  // Build a lookup index of all bookings (name parts → list of {room, checkin}) from Sheet1.
+  // Used to resolve the REAL room of each guest in a multi-room invoice payout, since the
+  // "ห้อง" field in Payout_Income_Log only ever stores the combined room list (e.g. "108, 204, 300")
+  // for every guest in the payout, with no indication of who stayed in which room.
+  const bookingIndex_ = buildBookingLookupIndex_(ss);
 
   const data = src.getDataRange().getValues();
   const header = data[0];
@@ -201,6 +231,19 @@ function getInvoiceToCreate_(ss, todayStr) {
 
     const entries = subs.length > 0 ? subs : [{ guest: firstGuest, confCode: firstConfCode, net: totalNet }];
 
+    // เมื่อมีหลาย entries (multi-guest ใน 1 payout) และ room field มีหลายห้อง (comma-separated)
+    // ห้ามเดาว่า room ตัวที่ i ตรงกับ entry ตัวที่ i ตามลำดับ — พบว่าลำดับใน room field
+    // ไม่ได้สัมพันธ์กับลำดับ guest ใน notes เสมอไป (บางครั้งตรง บางครั้งสลับ)
+    // วิธีที่แม่นยำกว่า: ค้นหา room จริงของ guest นั้นจาก booking sheet (Sheet1) โดยตรง
+    // ด้วยชื่อ + checkin ใกล้เคียง (±3 วัน) ถ้าหาไม่เจอ fallback เป็น roomList ทั้งหมด
+    // (กว้างกว่าเดิม แต่ยังดีกว่าเดาผิด)
+    const roomList = room.split(',').map(r => r.trim()).filter(Boolean);
+    function findRoomForGuest(guestName) {
+      const found = lookupRoomFromIndex_(bookingIndex_, guestName, checkin, roomList);
+      if (found) return found;
+      return room; // fallback: couldn't resolve — use combined room string (still better than wrong room)
+    }
+
     // invoiceKey: ถ้ามีหลาย entries และ conf ซ้ำ ใส่ index กำกับ (#0, #1)
     const confCount = {};
     entries.forEach(e => { confCount[e.confCode] = (confCount[e.confCode] || 0) + 1; });
@@ -219,9 +262,11 @@ function getInvoiceToCreate_(ss, todayStr) {
         firstSeen = todayStr; seenMap[invoiceKey] = todayStr;
         seenChanged = true; isNewSeen = true;
       }
+      const entryGuest = entry.guest || firstGuest;
+      const entryRoom = (entries.length > 1 && roomList.length > 1) ? findRoomForGuest(entryGuest) : room;
       out.push({
-        invoiceKey, bookingId, room,
-        guest: entry.guest || firstGuest,
+        invoiceKey, bookingId, room: entryRoom,
+        guest: entryGuest,
         checkin, checkout, nights,
         net: entries.length > 1 ? entry.net : totalNet,
         isSplitFromMulti: entries.length > 1,
@@ -232,7 +277,7 @@ function getInvoiceToCreate_(ss, todayStr) {
         detectedToday: detectedDate === todayStr,
         firstSeen, isNewInList: isNewSeen,
         done: !!doneMap[invoiceKey],
-        matchKeys: makeMatchKeys_(entry.guest || firstGuest, checkin, room, entry.confCode || firstConfCode),
+        matchKeys: makeMatchKeys_(entryGuest, checkin, entryRoom),
       });
     });
   });
@@ -246,22 +291,109 @@ function getInvoiceToCreate_(ss, todayStr) {
 }
 
 /* ============================================================
+ *  Room status — full Sheet1 dump for Check-in/Out PMS view
+ *  (ไม่ filter/dedupe เหมือน getBookingToAdd_ เพราะ tab นี้ต้องเห็นทุก
+ *   stay ที่ checked-in อยู่ หรือกำลังจะเข้า ไม่ใช่แค่ booking ที่ยังไม่ add invoice)
+ * ============================================================ */
+function getRoomStatus_() {
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
+  if (!src) throw new Error('ไม่พบชีต: ' + SRC_BOOKING_SHEET);
+
+  const data = src.getDataRange().getValues();
+  const header = data[0];
+  const rows = data.slice(1).filter(r => r.join('').trim() !== '');
+  const idx = indexMap_(header, ['เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์', 'Channel', 'ResId', 'Note']);
+
+  const stays = rows.map(r => ({
+    room:     String(r[idx['เลขห้อง']] || '').trim(),
+    guest:    String(r[idx['ชื่อแขก']] || '').trim(),
+    checkin:  formatCellDate_(r[idx['เช็คอิน']]),
+    checkout: formatCellDate_(r[idx['เช็คเอาท์']]),
+    channel:  String(r[idx.Channel] || '').trim(),
+    resId:    String(r[idx.ResId] || '').trim(),
+    note:     String(r[idx.Note] || '').trim(),
+  })).filter(s => s.checkin && s.checkout);
+
+  return { today: formatDateYMD_(new Date()), stays };
+}
+
+/* ============================================================
+ *  Booking lookup index — resolves real room for multi-room invoices
+ * ------------------------------------------------------------
+ *  Payout_Income_Log stores one combined "ห้อง" field (e.g. "108, 204, 300")
+ *  for ALL guests in a multi-room payout — there's no per-guest room data there.
+ *  To resolve which guest stayed in which room, we look up the REAL booking
+ *  record from Sheet1 by name + checkin proximity, restricted to rooms that
+ *  are actually listed in this invoice's room field (extra safety net).
+ * ============================================================ */
+function buildBookingLookupIndex_(ss) {
+  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
+  if (!src) return {};
+  const data = src.getDataRange().getValues();
+  const header = data[0];
+  const rows = data.slice(1).filter(r => r.join('').trim() !== '');
+  const idx = indexMap_(header, ['เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์']);
+
+  const index = {}; // namePart -> [{room, checkin}]
+  rows.forEach(r => {
+    const guest = String(r[idx['ชื่อแขก']] || '').trim();
+    const room  = String(r[idx['เลขห้อง']] || '').trim();
+    const rn    = roomNum_(room);
+    const checkin = formatCellDate_(r[idx['เช็คอิน']]);
+    if (!rn || !checkin) return;
+    allNameParts_(guest).forEach(p => {
+      if (!index[p]) index[p] = [];
+      index[p].push({ room: rn, checkin });
+    });
+  });
+  return index;
+}
+
+function lookupRoomFromIndex_(index, guestName, invoiceCheckin, allowedRoomList) {
+  const parts = allNameParts_(guestName);
+  const allowedNums = allowedRoomList.map(roomNum_).filter(Boolean);
+  let best = null, bestDist = Infinity;
+
+  parts.forEach(p => {
+    const candidates = index[p] || [];
+    candidates.forEach(c => {
+      // Only consider rooms that are actually part of this invoice's room list —
+      // never assign a room the invoice didn't even mention.
+      if (allowedNums.length && allowedNums.indexOf(c.room) === -1) return;
+      const dist = Math.abs(daysDiff_(invoiceCheckin, c.checkin));
+      if (dist <= 3 && dist < bestDist) {
+        bestDist = dist;
+        best = c.room;
+      }
+    });
+  });
+  return best;
+}
+
+function daysDiff_(a, b) {
+  try {
+    const da = new Date(a + 'T00:00:00Z');
+    const db = new Date(b + 'T00:00:00Z');
+    return (da.getTime() - db.getTime()) / 86400000;
+  } catch (e) {
+    return 999;
+  }
+}
+
+/* ============================================================
  *  Matching key builder — v2
  *  สร้าง key หลายแบบ:
  *    "n:{namePart}|{date}"  — name word + checkin (±2 วัน)
  *    "cr:{date}|{roomNum}"  — checkin + room number (±2 วัน)
  * ============================================================ */
-function makeMatchKeys_(guest, checkin, room, confCode) {
+function makeMatchKeys_(guest, checkin, room) {
   const parts = allNameParts_(guest);   // all words ≥3 chars
   const rn    = roomNum_(room);         // 3-digit room number
   const ci    = String(checkin || '').trim().substring(0, 10);
   const dates = ciDates_(ci);           // ci ±2 days
 
   const keys = [];
-  // conf: HM code — unambiguous match ข้าม OTA username
-  const hmCodes = String(confCode || '').match(/HM[A-Z0-9]{6,}/gi) || [];
-  hmCodes.forEach(c => keys.push('conf:' + c.toUpperCase()));
-
   parts.forEach(p => {
     dates.forEach(dt => keys.push('n:' + p + '|' + dt));
   });
@@ -274,8 +406,12 @@ function makeMatchKeys_(guest, checkin, room, confCode) {
 function allNameParts_(raw) {
   raw = String(raw || '').trim();
   return raw.split(/[\s,\/\\]+/)
-    .map(p => p.toLowerCase().replace(/[^a-z0-9ก-๙]/g, ''))
-    .filter(p => p.length >= 3);
+    .map(p => p.toLowerCase().replace(/[^a-z0-9ก-๙\u4e00-\u9fff\u3400-\u4dbf]/g, ''))
+    .filter(p => {
+      if (!p) return false;
+      const isCjk = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(p);
+      return isCjk ? p.length >= 2 : p.length >= 3;
+    });
 }
 
 function roomNum_(room) {
@@ -288,7 +424,7 @@ function ciDates_(ci) {
   if (!ci || ci.length < 10) return dates;
   try {
     const d = new Date(ci + 'T00:00:00Z');
-    for (let delta = -2; delta <= 2; delta++) {
+    for (let delta = -4; delta <= 4; delta++) {
       if (delta === 0) continue;
       const d2 = new Date(d.getTime() + delta * 86400000);
       dates.push(d2.toISOString().substring(0, 10));
@@ -349,22 +485,27 @@ function normalizeCode_(s) {
 /* ============================================================
  *  GitHub integration helpers
  * ============================================================ */
-function setupGithubToken() {
-  PropertiesService.getScriptProperties().setProperty('GITHUB_TOKEN', 'PASTE_YOUR_TOKEN_HERE');
-  Logger.log('✅ GITHUB_TOKEN set');
-}
+// setupGithubToken() ถูกลบออกแล้ว — ฟังก์ชันนี้เขียนทับ GITHUB_TOKEN ด้วย placeholder
+// string ทุกครั้งที่ถูกรัน (โดยตั้งใจหรือไม่ตั้งใจ) ทำให้ token จริงที่ตั้งไว้หายไป
+// ตั้งค่า GITHUB_TOKEN ผ่าน Project Settings → Script Properties โดยตรงเท่านั้น
 
 function testGithubToken() {
-  const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+  const token = PropertiesService.getScriptProperties().getProperty('GH_TOKEN_V2');
+  Logger.log('Token length: ' + (token ? token.length : 'null'));
+  Logger.log('Token first 10: ' + (token ? token.substring(0,10) : 'null'));
+  Logger.log('Token last 5: ' + (token ? token.substring(token.length-5) : 'null'));
+  Logger.log('Has whitespace: ' + (token ? /\s/.test(token) : 'null'));
   const res = UrlFetchApp.fetch('https://api.github.com/repos/theloftlivingspace-droid/loft-booking-invoice-todo', {
-    headers: { Authorization: 'token ' + token }
+    headers: { Authorization: 'token ' + token },
+    muteHttpExceptions: true
   });
+  Logger.log('Status: ' + res.getResponseCode());
   Logger.log(res.getContentText().slice(0, 300));
 }
 
 function pushToGithub() {
-  const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
-  if (!token) throw new Error('ไม่พบ GITHUB_TOKEN — ใส่ใน Script Properties ก่อน');
+  const token = PropertiesService.getScriptProperties().getProperty('GH_TOKEN_V2');
+  if (!token) throw new Error('ไม่พบ GH_TOKEN_V2 — ใส่ใน Script Properties ก่อน');
 
   const REPO = 'theloftlivingspace-droid/loft-booking-invoice-todo';
   const BRANCH = 'main';
