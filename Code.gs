@@ -202,13 +202,13 @@ function getInvoiceToCreate_(ss, todayStr) {
     //   format A (✅ total row): "✅ Airbnb payout | GuestName(CONFCODE) NET ฿1234.56 | ..."
     //   format B (↳ sub-row ของ SCB): "↳ GuestName(CONFCODE) NET ฿1234.56"
     const notes = String(r[idx['หมายเหตุ']] || '');
-    // pattern: ชื่อแขก (อาจมีช่องว่าง/comma) ตามด้วย (CONFCODE) NET ฿amount
-    // รองรับ conf code ว่างก็ได้: GuestName() NET ฿xxx → ใช้ชื่อแขก match แทน
-    const subPattern = /([^|(↳\n]+?)\(([^)]*)\)\s*NET\s+฿([\d,]+\.?\d*)/g;
+    // pattern: ชื่อแขก ตามด้วย (CONFCODE) NET ฿amount
+    // หลีกเลี่ยง Unicode char ใน character class — ใช้ negated pipe/paren/newline แทน
+    const subPattern = /([^|()\n]+?)\(([^)]*)\)\s*NET\s+[\u0E3F]([\d,]+\.?\d*)/g;
     const subs = [];
     let m;
     while ((m = subPattern.exec(notes)) !== null) {
-      const guestClean = m[1].trim().replace(/^[✅↳\s|]+/, '').trim();
+      const guestClean = m[1].trim().replace(/^[\s|]+/, '').trim();
       if (!guestClean) continue;
       subs.push({
         guest: guestClean,
