@@ -99,31 +99,6 @@
       font-size: 13px; opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 999;
     }
     .toast.show { opacity: 1; }
-    .match-score { font-size: 10px; color: #999; margin-left: 2px; }
-    .copy-modal-overlay {
-      display: none; position: fixed; inset: 0;
-      background: rgba(0,0,0,0.4); z-index: 1000;
-      align-items: center; justify-content: center;
-    }
-    .copy-modal-overlay.show { display: flex; }
-    .copy-modal {
-      background: white; border-radius: 14px; padding: 20px 24px;
-      width: 88%; max-width: 380px; box-shadow: 0 8px 32px rgba(0,0,0,0.2);
-    }
-    .copy-modal h3 { margin: 0 0 12px; font-size: 15px; color: #333; }
-    .copy-modal-text {
-      width: 100%; padding: 10px 12px; font-size: 15px;
-      border: 2px solid var(--primary); border-radius: 8px;
-      background: #f0f5ff; color: #222;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      resize: none; outline: none;
-    }
-    .copy-modal-hint { font-size: 12px; color: #888; margin: 8px 0 14px; }
-    .copy-modal-close {
-      width: 100%; padding: 10px; background: var(--primary); color: white;
-      border: none; border-radius: 8px; font-size: 14px; font-weight: 600;
-      cursor: pointer;
-    }
   </style>
 </head>
 <body>
@@ -150,24 +125,20 @@
     <div class="panel" id="panel-invoice">
       <div class="toolbar">
         <span id="invoiceSummary"></span>
-        <button class="toggle-done" onclick="toggleShowDone('invoice')" >แสดง/ซ่อนรายการที่ทำแล้ว</button>
+        <button class="toggle-done" onclick="toggleShowDone('invoice')">แสดง/ซ่อนรายการที่ทำแล้ว</button>
       </div>
       <div id="invoiceList" class="loading">กำลังโหลดข้อมูล...</div>
     </div>
   </div>
   <div class="toast" id="toast"></div>
-  <div class="copy-modal-overlay" id="copyModalOverlay" onclick="closeCopyModal(event)">
-    <div class="copy-modal">
-      <h3>📋 คัดลอกข้อความ</h3>
-      <textarea class="copy-modal-text" id="copyModalText" rows="2" readonly></textarea>
-      <p class="copy-modal-hint">กด <strong>เลือกทั้งหมด → คัดลอก</strong> หรือ long-press แล้วเลือก Copy</p>
-      <button class="copy-modal-close" onclick="closeCopyModal()">ปิด</button>
-    </div>
-  </div>
 
   <script>
     let DATA = null;
     let showDone = { booking: true, invoice: true };
+
+    // Store items in JS arrays — avoid inline JSON in onclick attributes
+    let _bookingItems = [];
+    let _invoiceItems = [];
 
     function switchTab(tab) {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
@@ -181,8 +152,9 @@
     }
 
     function onError(err) {
-      document.getElementById('bookingList').innerHTML = '<div class="empty">โหลดไม่สำเร็จ: ' + err.message + '</div>';
-      document.getElementById('invoiceList').innerHTML = '<div class="empty">โหลดไม่สำเร็จ: ' + err.message + '</div>';
+      const msg = '<div class="empty">โหลดไม่สำเร็จ: ' + esc(err.message) + ' <button onclick="load()" style="margin-left:8px;padding:4px 12px;border-radius:6px;border:1px solid #ccc;cursor:pointer">ลองใหม่</button></div>';
+      document.getElementById('bookingList').innerHTML = msg;
+      document.getElementById('invoiceList').innerHTML = msg;
     }
 
     function onData(data) {
@@ -193,57 +165,44 @@
 
     function render() { renderBooking(); renderInvoice(); }
 
-    // ============================================================
-    // Multi-key matching v2:
-    //  matchKeys = array of "n:{namePart}|{date}" and "cr:{date}|{room}"
-    //  สร้างจาก makeMatchKeys_ ใน Code.gs (±2 วัน, all name words ≥3 chars)
-    // ============================================================
-
+    // ── Matching (key-set based, no inline JSON) ──────────────────
     function buildKeySet(items) {
-      const set = new Set();
-      items.forEach(x => (x.matchKeys || []).forEach(k => set.add(k)));
-      return set;
+      const s = new Set();
+      items.forEach(x => (x.matchKeys || []).forEach(k => s.add(k)));
+      return s;
     }
 
     function hasMatch(item, keySet) {
       return (item.matchKeys || []).some(k => keySet.has(k));
     }
 
-    // jumpKey: prefer name+date key that's most specific (first 'n:' key)
-    function jumpKey(item) {
-      const nk = (item.matchKeys || []).find(k => k.startsWith('n:'));
-      return nk || (item.matchKeys || [])[0] || '';
-    }
-
+    // Use array index as stable card ID — avoids passing complex strings into HTML
     function renderBooking() {
       const list = DATA.booking;
+      _bookingItems = list;
       const container = document.getElementById('bookingList');
-      const pending = list.filter(x => !x.done).length;
+      const pending  = list.filter(x => !x.done).length;
       const newCount = list.filter(x => x.isNewToday && !x.done).length;
       document.getElementById('bookingCount').textContent = pending;
       document.getElementById('bookingSummary').textContent =
         'ทั้งหมด ' + list.length + ' รายการ • ค้างเพิ่ม ' + pending + ' • ใหม่วันนี้ ' + newCount;
 
       const invKeySet = buildKeySet(DATA.invoice);
-      const visible = list.filter(x => showDone.booking || !x.done);
+      const visible = list.map((x,i) => ({item:x,idx:i})).filter(({item}) => showDone.booking || !item.done);
       if (!visible.length) { container.innerHTML = '<div class="empty">ไม่มีรายการ</div>'; return; }
 
-      container.innerHTML = visible.map(item => {
+      container.innerHTML = visible.map(({item, idx}) => {
         const cls = ['card'];
         if (item.isNewToday) cls.push('is-new');
         if (item.done) cls.push('is-done');
         const hasMat = hasMatch(item, invKeySet);
-        const jk = jumpKey(item);
 
-        // Copy text = "ชื่อแขก / Channel" (e.g. "John Smith / Airbnb")
-        const copyVal = item.guest + ' / ' + (item.channel || 'Unknown');
-
-        return '<div class="' + cls.join(' ') + '" data-bjkey="' + esc(jk) + '">' +
+        return '<div class="' + cls.join(' ') + '" data-bidx="' + idx + '">' +
           '<input type="checkbox" class="booking-check" data-resid="' + esc(item.resId) + '" ' + (item.done ? 'checked' : '') + '>' +
           '<div class="card-body">' +
             '<div class="card-title">' +
               esc(item.room) + ' — ' + esc(item.guest) +
-              '<button class="btn-copy" data-copy="' + esc(copyVal) + '" onclick="copyText(this.dataset.copy, this)" title="Copy ชื่อแขก / OTA">📋</button>' +
+              '<button class="btn-copy" data-copy="' + esc(item.guest + ' / ' + (item.channel || 'Unknown')) + '" title="Copy ชื่อแขก / OTA">📋</button>' +
             '</div>' +
             '<div class="card-sub">' + esc(item.checkin) + ' → ' + esc(item.checkout) +
               (item.note ? ' • ' + esc(item.note) : '') + '</div>' +
@@ -251,7 +210,7 @@
               '<span class="chip">' + esc(item.channel) + '</span>' +
               '<span class="chip">' + esc(item.resId) + '</span>' +
               (item.isNewToday ? '<span class="chip flag-new">ใหม่วันนี้ ✅</span>' : '') +
-              '<button class="btn-link ' + (hasMat ? 'has-match' : '') + '" data-jkey="' + esc(jk) + '" onclick="jumpToInvoice(this.dataset.jkey)">' +
+              '<button class="btn-link ' + (hasMat ? 'has-match' : '') + '" data-jump-inv="' + idx + '">' +
                 (hasMat ? '🧾 ดู Invoice' : '🧾 ไม่มี Invoice') +
               '</button>' +
             '</div>' +
@@ -262,23 +221,23 @@
 
     function renderInvoice() {
       const list = DATA.invoice;
+      _invoiceItems = list;
       const container = document.getElementById('invoiceList');
-      const pending = list.filter(x => !x.done).length;
+      const pending  = list.filter(x => !x.done).length;
       const newCount = list.filter(x => x.detectedToday && !x.done).length;
       document.getElementById('invoiceCount').textContent = pending;
       document.getElementById('invoiceSummary').textContent =
         'ทั้งหมด ' + list.length + ' รายการ • ค้างออกบิล ' + pending + ' • ตรวจพบวันนี้ ' + newCount;
 
       const bkKeySet = buildKeySet(DATA.booking);
-      const visible = list.filter(x => showDone.invoice || !x.done);
+      const visible = list.map((x,i) => ({item:x,idx:i})).filter(({item}) => showDone.invoice || !item.done);
       if (!visible.length) { container.innerHTML = '<div class="empty">ไม่มีรายการ</div>'; return; }
 
-      container.innerHTML = visible.map(item => {
+      container.innerHTML = visible.map(({item, idx}) => {
         const cls = ['card'];
         if (item.detectedToday) cls.push('is-new');
         if (item.done) cls.push('is-done');
         const hasMat = hasMatch(item, bkKeySet);
-        const jk = jumpKey(item);
 
         const netNum = formatNum(item.net);
         const netRaw = String(item.net == null ? '' : item.net).replace(/[^0-9.]/g, '');
@@ -286,13 +245,13 @@
         const netChip = '<span class="chip net">' +
           'NET ฿' + esc(netNum) +
           (item.isSplitFromMulti ? ' <span style="opacity:.55;font-weight:400;font-size:11px">(รวม ฿' + esc(formatNum(item.groupNet)) + ')</span>' : '') +
-          '<button class="btn-copy-net" onclick="copyNetNum(\'' + netRaw + '\', this)" title="Copy ยอด">⎘</button>' +
+          '<button class="btn-copy-net" data-copy="' + esc(netRaw) + '" title="Copy ยอด">⎘</button>' +
         '</span>';
 
         const splitChip = item.isSplitFromMulti
           ? '<span class="chip split">รายการ ' + item.splitIndex + '/' + item.splitTotal + '</span>' : '';
 
-        return '<div class="' + cls.join(' ') + '" data-ijkey="' + esc(jk) + '">' +
+        return '<div class="' + cls.join(' ') + '" data-iidx="' + idx + '">' +
           '<input type="checkbox" class="invoice-check" data-invoicekey="' + esc(item.invoiceKey) + '" ' + (item.done ? 'checked' : '') + '>' +
           '<div class="card-body">' +
             '<div class="card-title">ห้อง ' + esc(item.room) + ' — ' + esc(item.guest) + '</div>' +
@@ -303,7 +262,7 @@
               splitChip + netChip +
               '<span class="chip">ตรวจพบ ' + esc(item.detectedDate) + '</span>' +
               (item.detectedToday ? '<span class="chip flag-new">ตรวจพบวันนี้ ✅</span>' : '') +
-              '<button class="btn-link ' + (hasMat ? 'has-match' : '') + '" data-jkey="' + esc(jk) + '" onclick="jumpToBooking(this.dataset.jkey)">' +
+              '<button class="btn-link ' + (hasMat ? 'has-match' : '') + '" data-jump-bk="' + idx + '">' +
                 (hasMat ? '📅 ดู Booking' : '📅 ไม่มี Booking') +
               '</button>' +
             '</div>' +
@@ -318,66 +277,65 @@
       return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
 
-    function jumpToInvoice(key) {
-      switchTab('invoice');
-      setTimeout(() => highlightCard('ijkey', key), 50);
-    }
+    // ── Event delegation (no inline onclick with data) ────────────
+    document.addEventListener('click', function(e) {
+      // Copy buttons
+      const copyBtn = e.target.closest('[data-copy]');
+      if (copyBtn) {
+        const text = copyBtn.getAttribute('data-copy');
+        navigator.clipboard.writeText(text).then(() => {
+          const orig = copyBtn.textContent;
+          copyBtn.textContent = '✅'; copyBtn.classList.add('copied');
+          showToast('คัดลอกแล้ว: ' + text);
+          setTimeout(() => { copyBtn.textContent = orig; copyBtn.classList.remove('copied'); }, 2000);
+        }).catch(() => showToast('ไม่สามารถคัดลอกได้'));
+        return;
+      }
 
-    function jumpToBooking(key) {
-      switchTab('booking');
-      setTimeout(() => highlightCard('bjkey', key), 50);
-    }
+      // Jump to invoice
+      const jumpInv = e.target.closest('[data-jump-inv]');
+      if (jumpInv) {
+        const bIdx = parseInt(jumpInv.getAttribute('data-jump-inv'));
+        const bItem = _bookingItems[bIdx];
+        if (!bItem) return;
+        const invKeySet = buildKeySet(DATA.invoice);
+        const matchedInvIdx = DATA.invoice.findIndex(x => hasMatch(bItem, new Set(x.matchKeys || [])) || hasMatch(x, new Set(bItem.matchKeys || [])));
+        switchTab('invoice');
+        setTimeout(() => highlightCardByIdx('iidx', matchedInvIdx >= 0 ? matchedInvIdx : -1), 50);
+        return;
+      }
 
-    function highlightCard(attr, key) {
+      // Jump to booking
+      const jumpBk = e.target.closest('[data-jump-bk]');
+      if (jumpBk) {
+        const iIdx = parseInt(jumpBk.getAttribute('data-jump-bk'));
+        const iItem = _invoiceItems[iIdx];
+        if (!iItem) return;
+        const matchedBkIdx = DATA.booking.findIndex(x => hasMatch(iItem, new Set(x.matchKeys || [])) || hasMatch(x, new Set(iItem.matchKeys || [])));
+        switchTab('booking');
+        setTimeout(() => highlightCardByIdx('bidx', matchedBkIdx >= 0 ? matchedBkIdx : -1), 50);
+        return;
+      }
+    });
+
+    function highlightCardByIdx(attr, idx) {
       document.querySelectorAll('.card').forEach(c => c.classList.remove('highlighted'));
-      if (!key) { showToast('ไม่พบรายการที่ตรงกัน'); return; }
-      const els = document.querySelectorAll('[data-' + attr + '="' + CSS.escape(key) + '"]');
-      if (els.length) {
-        els.forEach(el => el.classList.add('highlighted'));
-        els[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
-        setTimeout(() => els.forEach(el => el.classList.remove('highlighted')), 3000);
+      if (idx < 0) { showToast('ไม่พบรายการที่ตรงกัน'); return; }
+      const el = document.querySelector('[data-' + attr + '="' + idx + '"]');
+      if (el) {
+        el.classList.add('highlighted');
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setTimeout(() => el.classList.remove('highlighted'), 3000);
       } else {
         showToast('ไม่พบรายการที่ตรงกัน');
       }
     }
 
-    function showCopyModal(text) {
-      const overlay = document.getElementById('copyModalOverlay');
-      const ta = document.getElementById('copyModalText');
-      ta.value = text;
-      overlay.classList.add('show');
-      // Auto-select after short delay so keyboard doesn't pop up immediately
-      setTimeout(() => { ta.focus(); ta.select(); }, 100);
-    }
-
-    function closeCopyModal(e) {
-      if (e && e.target !== document.getElementById('copyModalOverlay')) return;
-      document.getElementById('copyModalOverlay').classList.remove('show');
-    }
-
-    function copyNetNum(numStr, btn) {
-      copyToClipboard(numStr);
-    }
-
-    function copyText(text, btn) {
-      copyToClipboard(text);
-    }
-
-    function copyToClipboard(text) {
-      navigator.clipboard.writeText(text).then(() => {
-        showToast('"' + text + '" คัดลอกแล้ว');
-      }).catch(() => {
-        showToast('ไม่สามารถคัดลอกได้');
-      });
-    }
-
-    function showToast(msg) {
-      const t = document.getElementById('toast');
-      t.textContent = msg; t.classList.add('show');
-      setTimeout(() => t.classList.remove('show'), 2500);
-    }
-
-    function onBookingToggle(resId, checked, el) {
+    // ── Checkbox listeners ────────────────────────────────────────
+    document.getElementById('bookingList').addEventListener('change', function(e) {
+      const el = e.target;
+      if (!el.classList.contains('booking-check')) return;
+      const resId = el.dataset.resid; const checked = el.checked;
       el.disabled = true;
       google.script.run
         .withSuccessHandler(() => {
@@ -387,9 +345,12 @@
         })
         .withFailureHandler(() => { el.checked = !checked; el.disabled = false; })
         .setBookingDone(resId, checked);
-    }
+    });
 
-    function onInvoiceToggle(invoiceKey, checked, el) {
+    document.getElementById('invoiceList').addEventListener('change', function(e) {
+      const el = e.target;
+      if (!el.classList.contains('invoice-check')) return;
+      const invoiceKey = el.dataset.invoicekey; const checked = el.checked;
       el.disabled = true;
       google.script.run
         .withSuccessHandler(() => {
@@ -399,16 +360,13 @@
         })
         .withFailureHandler(() => { el.checked = !checked; el.disabled = false; })
         .setInvoiceDone(invoiceKey, checked);
-    }
+    });
 
-    document.getElementById('bookingList').addEventListener('change', function(e) {
-      const el = e.target;
-      if (el.classList.contains('booking-check')) onBookingToggle(el.dataset.resid, el.checked, el);
-    });
-    document.getElementById('invoiceList').addEventListener('change', function(e) {
-      const el = e.target;
-      if (el.classList.contains('invoice-check')) onInvoiceToggle(el.dataset.invoicekey, el.checked, el);
-    });
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg; t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2500);
+    }
 
     function esc(s) {
       return String(s == null ? '' : s)
