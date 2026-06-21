@@ -241,7 +241,10 @@ function getInvoiceToCreate_(ss, todayStr) {
     function findRoomForGuest(guestName) {
       const found = lookupRoomFromIndex_(bookingIndex_, guestName, checkin, roomList);
       if (found) return found;
-      return room; // fallback: couldn't resolve — use combined room string (still better than wrong room)
+      // หาไม่เจอใน Sheet1 (เช่น booking เก่าที่ถูกลบหลัง checkout) —
+      // ห้ามคืน room string รวม (เช่น "363, 203") เพราะจะดู "ลิงค์ผิดห้อง"
+      // ให้ flag ชัดเจนว่าไม่ทราบห้องแทน เพื่อให้ผู้ใช้ตรวจมือ
+      return '⚠️ ไม่ทราบห้อง (' + room + ')';
     }
 
     // invoiceKey: ถ้ามีหลาย entries และ conf ซ้ำ ใส่ index กำกับ (#0, #1)
