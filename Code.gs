@@ -588,3 +588,93 @@ function getProp_(key) {
 function setProp_(key, obj) {
   PropertiesService.getScriptProperties().setProperty(key, JSON.stringify(obj));
 }
+
+/* ============================================================
+ *  pullFromGithub — ดึง Code.gs + Index.html จาก GitHub
+ *  แล้ว overwrite ไฟล์ใน Apps Script project นี้ทันที
+ *
+ *  รันจาก Apps Script editor ▶ Run > pullFromGithub
+ *  ไม่ต้อง deploy — เห็นผลทันทีหลัง reload web app
+ * ============================================================ */
+function pullFromGithub() {
+  const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+  if (!token) throw new Error('ไม่พบ GITHUB_TOKEN — รัน setupGithubToken() ก่อน');
+
+  const REPO   = 'theloftlivingspace-droid/loft-booking-invoice-todo';
+  const BRANCH = 'main';
+  const API    = 'https://api.github.com';
+  const ghHeaders = { Authorization: 'token ' + token, 'User-Agent': 'Apps-Script-Puller' };
+
+  function ghGet(path) {
+    const res = UrlFetchApp.fetch(API + path, { headers: ghHeaders, muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) throw new Error('GitHub GET ' + path + ' → ' + res.getResponseCode());
+    return JSON.parse(res.getContentText());
+  }
+
+  // ดึง file list จาก tree ล่าสุด
+  const ref    = ghGet('/repos/' + REPO + '/git/ref/heads/' + BRANCH);
+  const commit = ghGet('/repos/' + REPO + '/git/commits/' + ref.object.sha);
+  const tree   = ghGet('/repos/' + REPO + '/git/trees/' + commit.tree.sha);
+
+  // Export project เพื่อดู file list ปัจจุบัน
+  const scriptId = ScriptApp.getScriptId();
+  const exportUrl = 'https://www.googleapis.com/drive/v3/files/' + scriptId +
+    '/export?mimeType=application/vnd.google-apps.script%2Bjson';
+  const exportRes = UrlFetchApp.fetch(exportUrl, {
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true
+  });
+  if (exportRes.getResponseCode() !== 200)
+    throw new Error('Export failed: ' + exportRes.getContentText().slice(0, 200));
+
+  const project = JSON.parse(exportRes.getContentText());
+  const files   = project.files || [];
+
+  // Map GitHub tree → { filename: content }
+  const ghFiles = {};
+  tree.tree.forEach(function(item) {
+    if (item.type !== 'blob') return;
+    // map: Code.gs → server_js "Code", Index.html → html "Index"
+    const name = item.path;
+    if (name === 'Code.gs' || name === 'Index.html') {
+      const blob = ghGet('/repos/' + REPO + '/git/blobs/' + item.sha);
+      ghFiles[name] = Utilities.newBlob(
+        Utilities.base64Decode(blob.content.replace(/\n/g, '')),
+        'text/plain'
+      ).getDataAsString();
+    }
+  });
+
+  Logger.log('📥 ดึงจาก GitHub: ' + Object.keys(ghFiles).join(', '));
+
+  // Overwrite files ใน project
+  files.forEach(function(f) {
+    if (f.type === 'server_js' && f.name === 'Code' && ghFiles['Code.gs']) {
+      f.source = ghFiles['Code.gs'];
+      Logger.log('✅ Updated: Code.gs (' + f.source.length + ' chars)');
+    }
+    if (f.type === 'html' && f.name === 'Index' && ghFiles['Index.html']) {
+      f.source = ghFiles['Index.html'];
+      Logger.log('✅ Updated: Index.html (' + f.source.length + ' chars)');
+    }
+  });
+
+  // Push กลับเข้า Apps Script via Drive API
+  const importUrl = 'https://www.googleapis.com/upload/drive/v3/files/' + scriptId +
+    '?uploadType=media&mimeType=application/vnd.google-apps.script%2Bjson';
+  const importRes = UrlFetchApp.fetch(importUrl, {
+    method: 'patch',
+    headers: {
+      Authorization: 'Bearer ' + ScriptApp.getOAuthToken(),
+      'Content-Type': 'application/vnd.google-apps.script+json'
+    },
+    payload: JSON.stringify(project),
+    muteHttpExceptions: true
+  });
+
+  if (importRes.getResponseCode() !== 200)
+    throw new Error('Import failed: ' + importRes.getContentText().slice(0, 300));
+
+  Logger.log('🎉 pullFromGithub สำเร็จ! Reload web app เพื่อเห็นผล');
+  return 'OK';
+}
