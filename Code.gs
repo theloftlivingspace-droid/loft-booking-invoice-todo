@@ -639,7 +639,7 @@ function pullFromGithub() {
     if (name === 'Code.gs' || name === 'Index.html') {
       const blob = ghGet('/repos/' + REPO + '/git/blobs/' + item.sha);
       ghFiles[name] = Utilities.newBlob(
-        Utilities.base64Decode(blob.content.replace(/\n/g, '')),
+        Utilities.base64Decode(blob.content.replace(/[\s]/g, '')),
         'text/plain'
       ).getDataAsString();
     }
