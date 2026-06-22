@@ -142,8 +142,8 @@ function getInvoiceToCreate_(ss, todayStr) {
     'เช็คอิน', 'เช็คเอาท์', 'คืน', 'ยอดรวม (THB)', 'Commission (THB)', 'NET (THB)', 'สถานะ', 'หมายเหตุ',
   ]);
   // fallback column names (v22 และก่อนหน้า)
-  if (idx['ห้อง'] < 0) idx['ห้อง'] = header.findIndex(h => /ห้อง|เลขห้อง/i.test(String(h)));
-  if (idx['คืน'] < 0)  idx['คืน']  = header.findIndex(h => /คืน|จำนวนคืน/i.test(String(h)));
+  if (idx['\u0E2B\u0E49\u0E2D\u0E07'] < 0) idx['\u0E2B\u0E49\u0E2D\u0E07'] = header.findIndex(h => { const s = String(h); return s.indexOf('\u0E2B\u0E49\u0E2D\u0E07') >= 0 || s.indexOf('\u0E40\u0E25\u0E02\u0E2B\u0E49\u0E2D\u0E07') >= 0; });
+  if (idx['\u0E04\u0E37\u0E19'] < 0)  idx['\u0E04\u0E37\u0E19']  = header.findIndex(h => { const s = String(h); return s.indexOf('\u0E04\u0E37\u0E19') >= 0; });
   if (idx['NET (THB)'] < 0) idx['NET (THB)'] = header.findIndex(h => /NET/i.test(String(h)));
 
   const isPayableStatus = s => PAYOUT_STATUS_PREFIXES.some(p => s.startsWith(p));
@@ -220,9 +220,9 @@ function getInvoiceToCreate_(ss, todayStr) {
     if (!subs.length && notes.includes('฿')) {
       notes.split('|').forEach(seg => {
         seg = seg.trim();
-        const sm = seg.match(/([^(]+)\(([^)]*)\)\s*NET\s+฿([\d,]+\.?\d*)/);
+        const sm = seg.match(/([^(]+)\(([^)]*)\)\s*NET\s+\u0E3F([\d,]+\.?\d*)/);
         if (sm) {
-          const g = sm[1].trim().replace(/^[✅↳\s]+/, '').trim();
+          const g = sm[1].trim().replace(/^[\s|]+/, '').trim();
           if (g) subs.push({ guest: g, confCode: normalizeCode_(sm[2]), net: parseFloat(sm[3].replace(/,/g,'')) });
         }
       });
@@ -358,7 +358,7 @@ function firstNameCheckinKey_(guest, checkin) {
   const parts = raw.split(/[\s,]+/);
   // ถ้ามี comma → format "Last, First" → เอา parts[1] (First), ไม่งั้นเอา parts[0]
   const firstName = (raw.includes(',') && parts.length > 1 ? parts[1] : parts[0]) || '';
-  const fn = firstName.toLowerCase().replace(/[^a-z0-9ก-๙]/g, '');
+  const fn = firstName.toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '');
   return fn + '|' + String(checkin || '').trim();
 }
 
