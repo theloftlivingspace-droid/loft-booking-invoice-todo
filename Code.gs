@@ -48,6 +48,40 @@ const PROP_KEY_INVOICE_SEEN = 'invoice_seen_v1';      // { invoiceKey: 'yyyy-MM-
  *  Web app entry point
  * ============================================================ */
 function doGet(e) {
+  const action = e && e.parameter && e.parameter.action;
+
+  // ── JSON API mode (เรียกจาก Vercel frontend ผ่าน gas-proxy หรือโดยตรง) ──
+  if (action) {
+    try {
+      let result;
+      if (action === 'getData') {
+        result = getDashboardData();
+      } else if (action === 'getAllDocs') {
+        result = { ok: true, docs: {} }; // Drive docs index — stub (ไม่ได้ใช้ใน GAS version นี้)
+      } else if (action === 'setBookingDone') {
+        const id   = e.parameter.id   || '';
+        const done = e.parameter.done === 'true';
+        setBookingDone(id, done);
+        result = { ok: true };
+      } else if (action === 'setInvoiceDone') {
+        const id   = e.parameter.id   || '';
+        const done = e.parameter.done === 'true';
+        setInvoiceDone(id, done);
+        result = { ok: true };
+      } else {
+        result = { ok: false, error: 'Unknown action: ' + action };
+      }
+      return ContentService
+        .createTextOutput(JSON.stringify(result))
+        .setMimeType(ContentService.MimeType.JSON);
+    } catch (err) {
+      return ContentService
+        .createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+
+  // ── HTML Web App mode (เปิดโดยตรงใน browser) ──
   const template = HtmlService.createTemplateFromFile('Index');
   return template.evaluate()
     .setTitle('The Loft — Booking & Invoice To-Do')
