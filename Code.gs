@@ -198,6 +198,20 @@ function getInvoiceToCreate_(ss, todayStr) {
     return true;
   });
 
+  // Build subCiMap: conf code → {ci, co, nights} จาก sub-rows (↳) ที่ถูก filter ออก
+  // ใช้เพื่อดึง checkin/checkout ที่แท้จริงของแต่ละ guest ใน multi-guest payout
+  const subCiMap = {};
+  rows.forEach(r => {
+    const note = String(r[idx.หมายเหตุ] || '').trim();
+    if (!note.startsWith('↳')) return;
+    const conf = String(r[idx['Conf. Code']] || '').trim();
+    if (!conf || conf.includes(',')) return;
+    const ci = formatCellDate_(r[idx.เช็คอิน]);
+    const co = formatCellDate_(r[idx.เช็คเอาท์]);
+    const nts = r[idx.คืน] || '';
+    if (ci) subCiMap[conf] = { ci, co, nights: nts };
+  });
+
   const doneMap = getProp_(PROP_KEY_INVOICE_DONE);
   const seenMap = getProp_(PROP_KEY_INVOICE_SEEN);
   let seenChanged = false;
@@ -226,7 +240,9 @@ function getInvoiceToCreate_(ss, todayStr) {
     const subs = [];
     let m;
     while ((m = subPattern.exec(notes)) !== null) {
-      subs.push({ guest: m[1].trim(), confCode: m[2].trim(), net: parseFloat(m[3].replace(/,/g,'')) });
+      const _conf = m[2].trim();
+      const _sub = subCiMap[_conf] || {};
+      subs.push({ guest: m[1].trim(), confCode: _conf, net: parseFloat(m[3].replace(/,/g,'')), ci: _sub.ci || '', co: _sub.co || '', nights: _sub.nights || '' });
     }
 
     const entries = subs.length > 0 ? subs : [{ guest: firstGuest, confCode: firstConfCode, net: totalNet }];
@@ -238,9 +254,9 @@ function getInvoiceToCreate_(ss, todayStr) {
     // ด้วยชื่อ + checkin ใกล้เคียง (±3 วัน) ถ้าหาไม่เจอ fallback เป็น roomList ทั้งหมด
     // (กว้างกว่าเดิม แต่ยังดีกว่าเดาผิด)
     const roomList = room.split(',').map(r => r.trim()).filter(Boolean);
-    function findRoomForGuest(guestName) {
-      // ส่ง checkin ว่างเมื่อ multi-guest payout — checkin ของ total row เป็นของ guest คนแรกเท่านั้น
-      const found = lookupRoomFromIndex_(bookingIndex_, guestName, '', roomList);
+    function findRoomForGuest(guestName, entryCi) {
+      // ใช้ checkin ของ entry นั้นๆ (จาก sub-row) ถ้ามี ไม่งั้นใช้ว่าง
+      const found = lookupRoomFromIndex_(bookingIndex_, guestName, entryCi || '', roomList);
       if (found) return found;
       // หาไม่เจอใน Sheet1 (เช่น booking เก่าที่ถูกลบหลัง checkout) —
       // ห้ามคืน room string รวม (เช่น "363, 203") เพราะจะดู "ลิงค์ผิดห้อง"
@@ -267,11 +283,15 @@ function getInvoiceToCreate_(ss, todayStr) {
         seenChanged = true; isNewSeen = true;
       }
       const entryGuest = entry.guest || firstGuest;
-      const entryRoom = (entries.length > 1 && roomList.length > 1) ? findRoomForGuest(entryGuest) : room;
+      const entryRoom = (entries.length > 1 && roomList.length > 1) ? findRoomForGuest(entryGuest, entry.ci) : room;
+      // ใช้ ci/co/nights ของ entry (จาก sub-row) ถ้ามี ไม่งั้น fallback total row
+      const entryCheckin  = (entries.length > 1 && entry.ci)      ? entry.ci      : checkin;
+      const entryCheckout = (entries.length > 1 && entry.co)      ? entry.co      : checkout;
+      const entryNights   = (entries.length > 1 && entry.nights)  ? entry.nights  : nights;
       out.push({
         invoiceKey, bookingId, room: entryRoom,
         guest: entryGuest,
-        checkin, checkout, nights,
+        checkin: entryCheckin, checkout: entryCheckout, nights: entryNights,
         net: entries.length > 1 ? entry.net : totalNet,
         isSplitFromMulti: entries.length > 1,
         splitIndex: entries.length > 1 ? (i + 1) : null,
