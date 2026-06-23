@@ -198,16 +198,18 @@ function getInvoiceToCreate_(ss, todayStr) {
     return true;
   });
 
-  // Build subCiMap: conf code → {ci, co, nights} จาก sub-rows (↳) ที่ถูก filter ออก
-  // ใช้เพื่อดึง checkin/checkout ที่แท้จริงของแต่ละ guest ใน multi-guest payout
+  // Build subCiMap: conf code → {ci, co, nights} จาก single-conf rows ที่ถูก filter ออก
+  // เพราะ summaryBookingIds (multi-conf total row มีอยู่แล้ว)
+  // rows เหล่านี้มี ci/co จริงของแต่ละ guest — ต่างจาก total row ที่ ci/co เป็นของ guest แรก
   const subCiMap = {};
   rows.forEach(r => {
-    const note = String(r[idx.หมายเหตุ] || '').trim();
-    if (!note.startsWith('↳')) return;
-    const conf = String(r[idx['Conf. Code']] || '').trim();
+    const conf     = String(r[idx['Conf. Code']] || '').trim();
+    const bookingId = String(r[idx['Booking ID']] || '').trim();
+    // เฉพาะ single-conf rows ที่เป็นส่วนหนึ่งของ multi-guest payout
     if (!conf || conf.includes(',')) return;
-    const ci = formatCellDate_(r[idx.เช็คอิน]);
-    const co = formatCellDate_(r[idx.เช็คเอาท์]);
+    if (!summaryBookingIds.has(bookingId)) return;
+    const ci  = formatCellDate_(r[idx.เช็คอิน]);
+    const co  = formatCellDate_(r[idx.เช็คเอาท์]);
     const nts = r[idx.คืน] || '';
     if (ci) subCiMap[conf] = { ci, co, nights: nts };
   });
