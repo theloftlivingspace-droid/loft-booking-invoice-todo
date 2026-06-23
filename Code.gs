@@ -239,7 +239,8 @@ function getInvoiceToCreate_(ss, todayStr) {
     // (กว้างกว่าเดิม แต่ยังดีกว่าเดาผิด)
     const roomList = room.split(',').map(r => r.trim()).filter(Boolean);
     function findRoomForGuest(guestName) {
-      const found = lookupRoomFromIndex_(bookingIndex_, guestName, checkin, roomList);
+      // ส่ง checkin ว่างเมื่อ multi-guest payout — checkin ของ total row เป็นของ guest คนแรกเท่านั้น
+      const found = lookupRoomFromIndex_(bookingIndex_, guestName, '', roomList);
       if (found) return found;
       // หาไม่เจอใน Sheet1 (เช่น booking เก่าที่ถูกลบหลัง checkout) —
       // ห้ามคืน room string รวม (เช่น "363, 203") เพราะจะดู "ลิงค์ผิดห้อง"
@@ -364,6 +365,11 @@ function lookupRoomFromIndex_(index, guestName, invoiceCheckin, allowedRoomList)
       // Only consider rooms that are actually part of this invoice's room list —
       // never assign a room the invoice didn't even mention.
       if (allowedNums.length && allowedNums.indexOf(c.room) === -1) return;
+      // ถ้า invoiceCheckin ว่าง (multi-guest total row) → match by name+room only
+      if (!invoiceCheckin) {
+        if (best === null) best = c.room;
+        return;
+      }
       const dist = Math.abs(daysDiff_(invoiceCheckin, c.checkin));
       if (dist <= 3 && dist < bestDist) {
         bestDist = dist;
