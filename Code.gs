@@ -35,9 +35,18 @@ const PROP_KEY_INVOICE_SEEN = 'invoice_seen_v1';
  *  GET ?action=getData        → JSON API (for Vercel/React)
  *  GET ?action=setBookingDone&id=X&done=true  → JSON
  *  GET ?action=setInvoiceDone&id=X&done=true  → JSON
+ *  GET ?action=setNote&id=X&note=TEXT         → JSON (write Note col in Sheet1)
  *  GET (no action)            → serve HTML webapp
  * ============================================================ */
 function doGet(e) {
+  try {
+    return doGet_(e);
+  } catch (err) {
+    return jsonResponse_({ ok: false, error: String(err), stack: err && err.stack ? String(err.stack).substring(0, 500) : '' });
+  }
+}
+
+function doGet_(e) {
   const action = e && e.parameter && e.parameter.action;
 
   if (action === 'getData') {
@@ -60,6 +69,13 @@ function doGet(e) {
     const done = e.parameter.done === 'true';
     setInvoiceDone(id, done);
     return jsonResponse_({ ok: true });
+  }
+
+  if (action === 'setNote') {
+    const id   = e.parameter.id   || '';
+    const note = e.parameter.note || '';
+    const result = setBookingNote(id, note);
+    return jsonResponse_(result);
   }
 
   // Default: serve HTML webapp
@@ -479,6 +495,25 @@ function setInvoiceDone(invoiceKey, done) {
   if (done) map[invoiceKey] = true; else delete map[invoiceKey];
   setProp_(PROP_KEY_INVOICE_DONE, map);
   return true;
+}
+
+function setBookingNote(resId, note) {
+  if (!resId) return { ok: false, error: 'resId required' };
+  const ss  = SpreadsheetApp.getActiveSpreadsheet();
+  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
+  if (!src) return { ok: false, error: 'Sheet1 not found' };
+  const data   = src.getDataRange().getValues();
+  const header = data[0];
+  const idx    = indexMap_(header, ['ResId', 'Note']);
+  if (idx.ResId < 0) return { ok: false, error: 'ResId column not found' };
+  if (idx.Note  < 0) return { ok: false, error: 'Note column not found' };
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][idx.ResId] || '').trim() === resId) {
+      src.getRange(i + 1, idx.Note + 1).setValue(note);
+      return { ok: true };
+    }
+  }
+  return { ok: false, error: 'resId not found: ' + resId };
 }
 
 /* ============================================================
