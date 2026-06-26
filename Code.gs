@@ -61,6 +61,7 @@ function doGet_(e) {
     const id   = e.parameter.id   || '';
     const done = e.parameter.done === 'true';
     setBookingDone(id, done);
+    triggerStyleSheet1_();
     return jsonResponse_({ ok: true });
   }
 
@@ -68,6 +69,7 @@ function doGet_(e) {
     const id   = e.parameter.id   || '';
     const done = e.parameter.done === 'true';
     setInvoiceDone(id, done);
+    triggerStyleSheet1_();
     return jsonResponse_({ ok: true });
   }
 
@@ -510,6 +512,7 @@ function setBookingNote(resId, note) {
   for (var i = 1; i < data.length; i++) {
     if (String(data[i][idx.ResId] || '').trim() === resId) {
       src.getRange(i + 1, idx.Note + 1).setValue(note);
+      triggerStyleSheet1_();
       return { ok: true };
     }
   }
@@ -517,7 +520,21 @@ function setBookingNote(resId, note) {
 }
 
 /* ============================================================
- *  Helpers
+ *  Trigger styleSheet1 on payout-income-log GAS (fire-and-forget)
+ * ============================================================ */
+function triggerStyleSheet1_() {
+  try {
+    const PAYOUT_GAS_URL = 'https://script.google.com/macros/s/AKfycbyAP9Z_pIlKrXv9AOXwDhY0wNVSSFL0vU8VuH0SssFyxretRyt9CJNjxVZOLN3eFjs/exec';
+    UrlFetchApp.fetch(PAYOUT_GAS_URL + '?action=styleSheet1', {
+      muteHttpExceptions: true,
+      followRedirects: true,
+    });
+  } catch (e) {
+    Logger.log('triggerStyleSheet1_ error (non-fatal): ' + e);
+  }
+}
+
+/* ============================================================
  * ============================================================ */
 function indexMap_(header, keys) {
   const map = {};
