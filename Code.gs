@@ -499,7 +499,7 @@ function setInvoiceDone(invoiceKey, done) {
 
 function setBookingNote(resId, note) {
   if (!resId) return { ok: false, error: 'resId required' };
-  const ss  = SpreadsheetApp.getActiveSpreadsheet();
+  const ss  = SpreadsheetApp.openById(SOURCE_SHEET_ID);
   const src = ss.getSheetByName(SRC_BOOKING_SHEET);
   if (!src) return { ok: false, error: 'Sheet1 not found' };
   const data   = src.getDataRange().getValues();
