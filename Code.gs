@@ -524,8 +524,11 @@ function setBookingNote(resId, note) {
  * ============================================================ */
 function triggerStyleSheet1_() {
   try {
-    const PAYOUT_GAS_URL = 'https://script.google.com/macros/s/AKfycbyAP9Z_pIlKrXv9AOXwDhY0wNVSSFL0vU8VuH0SssFyxretRyt9CJNjxVZOLN3eFjs/exec';
-    UrlFetchApp.fetch(PAYOUT_GAS_URL + '?action=styleSheet1', {
+    var PAYOUT_GAS_URL = 'https://script.google.com/macros/s/AKfycbyAP9Z_pIlKrXv9AOXwDhY0wNVSSFL0vU8VuH0SssFyxretRyt9CJNjxVZOLN3eFjs/exec';
+    UrlFetchApp.fetch(PAYOUT_GAS_URL, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify({ action: 'styleSheet1' }),
       muteHttpExceptions: true,
       followRedirects: true,
     });
