@@ -46,6 +46,149 @@ function doGet(e) {
   }
 }
 
+/* ============================================================
+ *  POST entry point — used for binary/file uploads
+ *  POST body (JSON): { action: 'uploadDoc', room, checkin, resId, fileName, mimeType, base64Data }
+ *  POST body (JSON): { action: 'deleteDoc', fileId }
+ *  GET  ?action=getAllDocs    → JSON map of resId -> DocFile[]
+ * ============================================================ */
+function doPost(e) {
+  try {
+    const body = JSON.parse(e.postData.contents);
+    const action = body.action;
+
+    if (action === 'uploadDoc') {
+      return jsonResponse_(uploadDoc_(body));
+    }
+    if (action === 'deleteDoc') {
+      return jsonResponse_(deleteDoc_(body));
+    }
+
+    return jsonResponse_({ ok: false, error: 'Unknown POST action: ' + action });
+  } catch (err) {
+    return jsonResponse_({ ok: false, error: String(err), stack: err && err.stack ? String(err.stack).substring(0, 500) : '' });
+  }
+}
+
+// Drive folder that stores all check-in/out documents (passports, TM30, etc).
+// All uploads live in this single folder; the Docs sheet tracks per-booking association.
+const DOCS_DRIVE_FOLDER_ID = '1a2b3c4d5e6f7g8h9i0jKLMNOPQRSTUVWXYZ'; // placeholder — replace with real folder ID
+const DOCS_SHEET_NAME = 'Docs';
+
+function getOrCreateDocsFolder_() {
+  try {
+    return DriveApp.getFolderById(DOCS_DRIVE_FOLDER_ID);
+  } catch (err) {
+    // Folder ID not set up yet — create one under the source spreadsheet's parent folder
+    // and log the ID so it can be hardcoded above for future calls.
+    const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+    const parents = DriveApp.getFileById(ss.getId()).getParents();
+    const parentFolder = parents.hasNext() ? parents.next() : DriveApp.getRootFolder();
+    const existing = parentFolder.getFoldersByName('CheckInOut Documents');
+    if (existing.hasNext()) return existing.next();
+    const created = parentFolder.createFolder('CheckInOut Documents');
+    Logger.log('Created docs folder — update DOCS_DRIVE_FOLDER_ID to: ' + created.getId());
+    return created;
+  }
+}
+
+function getOrCreateDocsSheet_() {
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  let sheet = ss.getSheetByName(DOCS_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(DOCS_SHEET_NAME);
+    sheet.appendRow(['ResId', 'Room', 'Checkin', 'FileId', 'FileName', 'MimeType', 'UploadedAt']);
+  }
+  return sheet;
+}
+
+function uploadDoc_(body) {
+  const room = body.room || '';
+  const checkin = body.checkin || '';
+  const resId = body.resId || '';
+  const fileName = body.fileName || 'document';
+  const mimeType = body.mimeType || 'application/octet-stream';
+  const base64Data = body.base64Data || '';
+
+  if (!resId || !base64Data) {
+    return { ok: false, error: 'Missing resId or base64Data' };
+  }
+
+  let blob;
+  try {
+    const decoded = Utilities.base64Decode(base64Data);
+    blob = Utilities.newBlob(decoded, mimeType, fileName);
+  } catch (err) {
+    return { ok: false, error: 'Invalid base64 data: ' + String(err) };
+  }
+
+  const folder = getOrCreateDocsFolder_();
+  const file = folder.createFile(blob);
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+  const fileId = file.getId();
+  const uploadedAt = new Date().toISOString();
+
+  const sheet = getOrCreateDocsSheet_();
+  sheet.appendRow([resId, room, checkin, fileId, fileName, mimeType, uploadedAt]);
+
+  return {
+    ok: true,
+    fileId: fileId,
+    fileName: fileName,
+    mimeType: mimeType,
+    url: 'https://drive.google.com/file/d/' + fileId + '/view',
+    downloadUrl: 'https://drive.google.com/uc?export=download&id=' + fileId,
+    previewUrl: 'https://drive.google.com/file/d/' + fileId + '/preview',
+    uploadedAt: uploadedAt,
+  };
+}
+
+function deleteDoc_(body) {
+  const fileId = body.fileId || '';
+  if (!fileId) return { ok: false, error: 'Missing fileId' };
+
+  try {
+    DriveApp.getFileById(fileId).setTrashed(true);
+  } catch (err) {
+    return { ok: false, error: 'Could not delete file: ' + String(err) };
+  }
+
+  const sheet = getOrCreateDocsSheet_();
+  const data = sheet.getDataRange().getValues();
+  for (let i = data.length - 1; i >= 1; i--) {
+    if (data[i][3] === fileId) { // FileId column
+      sheet.deleteRow(i + 1);
+      break;
+    }
+  }
+
+  return { ok: true };
+}
+
+function getAllDocs_() {
+  const sheet = getOrCreateDocsSheet_();
+  const data = sheet.getDataRange().getValues();
+  const docs = {}; // resId -> DocFile[]
+
+  for (let i = 1; i < data.length; i++) {
+    const [resId, , , fileId, fileName, mimeType, uploadedAt] = data[i];
+    if (!resId || !fileId) continue;
+    if (!docs[resId]) docs[resId] = [];
+    docs[resId].push({
+      fileId: fileId,
+      fileName: fileName,
+      mimeType: mimeType,
+      url: 'https://drive.google.com/file/d/' + fileId + '/view',
+      downloadUrl: 'https://drive.google.com/uc?export=download&id=' + fileId,
+      previewUrl: 'https://drive.google.com/file/d/' + fileId + '/preview',
+      uploadedAt: uploadedAt,
+    });
+  }
+
+  return { ok: true, docs: docs };
+}
+
 function doGet_(e) {
   const action = e && e.parameter && e.parameter.action;
 
@@ -55,6 +198,10 @@ function doGet_(e) {
 
   if (action === 'getRoomStatus') {
     return jsonResponse_(getRoomStatus_());
+  }
+
+  if (action === 'getAllDocs') {
+    return jsonResponse_(getAllDocs_());
   }
 
   if (action === 'setBookingDone') {
