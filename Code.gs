@@ -274,6 +274,46 @@ function getCheckStatusMap_() {
   return map;
 }
 
+/* ============================================================
+ *  TEMP DEBUG — scan the Drive folder directly (bypasses the Docs
+ *  sheet entirely) to check whether uploaded files still physically
+ *  exist even if their sheet row was lost. Safe to remove later.
+ * ============================================================ */
+function debugScanDocsFolder_() {
+  const folder = getOrCreateDocsFolder_();
+  const files = folder.getFiles();
+  const driveFiles = [];
+  while (files.hasNext()) {
+    const f = files.next();
+    driveFiles.push({
+      fileId: f.getId(),
+      fileName: f.getName(),
+      createdAt: f.getDateCreated().toISOString(),
+      sizeBytes: f.getSize(),
+    });
+  }
+
+  const sheet = getOrCreateDocsSheet_();
+  const data = sheet.getDataRange().getValues();
+  const knownFileIds = {};
+  for (let i = 1; i < data.length; i++) {
+    const fileId = data[i][3];
+    if (fileId) knownFileIds[fileId] = true;
+  }
+
+  const orphaned = driveFiles.filter(f => !knownFileIds[f.fileId]);
+
+  return {
+    ok: true,
+    folderId: folder.getId(),
+    folderUrl: folder.getUrl(),
+    totalFilesInDrive: driveFiles.length,
+    totalRowsInSheet: Math.max(0, data.length - 1),
+    orphanedFiles: orphaned, // in Drive but NOT in the Docs sheet — recoverable
+    allDriveFiles: driveFiles,
+  };
+}
+
 function doGet_(e) {
   const action = e && e.parameter && e.parameter.action;
 
@@ -287,6 +327,10 @@ function doGet_(e) {
 
   if (action === 'getAllDocs') {
     return jsonResponse_(getAllDocs_());
+  }
+
+  if (action === 'debugScanDocsFolder') {
+    return jsonResponse_(debugScanDocsFolder_());
   }
 
   if (action === 'setBookingDone') {
