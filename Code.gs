@@ -63,6 +63,12 @@ function doPost(e) {
     if (action === 'deleteDoc') {
       return jsonResponse_(deleteDoc_(body));
     }
+    if (action === 'markCheckedIn') {
+      return jsonResponse_(markCheckedIn_(body));
+    }
+    if (action === 'earlyCheckout') {
+      return jsonResponse_(earlyCheckout_(body));
+    }
 
     return jsonResponse_({ ok: false, error: 'Unknown POST action: ' + action });
   } catch (err) {
@@ -187,6 +193,84 @@ function getAllDocs_() {
   }
 
   return { ok: true, docs: docs };
+}
+
+/* ============================================================
+ *  Check-in / Check-out persisted status
+ * ------------------------------------------------------------
+ *  Previously the frontend only tracked this in browser localStorage,
+ *  so a check-in marked on the staff's phone never showed up on the
+ *  admin's own device — nothing was ever written to a shared sheet.
+ *  This sheet is now the single source of truth, read by getRoomStatus_().
+ * ============================================================ */
+const STATUS_SHEET_NAME = 'CheckStatus';
+
+function getOrCreateStatusSheet_() {
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  let sheet = ss.getSheetByName(STATUS_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(STATUS_SHEET_NAME);
+    sheet.appendRow(['ResId', 'CheckedInAt', 'CheckedOutAt', 'IsEarlyCheckout', 'NewCheckoutDate']);
+  }
+  return sheet;
+}
+
+function findStatusRow_(sheet, resId) {
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === resId) return i + 1; // 1-indexed sheet row
+  }
+  return -1;
+}
+
+function markCheckedIn_(body) {
+  const resId = String(body.resId || '');
+  if (!resId) return { ok: false, error: 'Missing resId' };
+
+  const sheet = getOrCreateStatusSheet_();
+  const row = findStatusRow_(sheet, resId);
+  const now = new Date().toISOString();
+  if (row === -1) {
+    sheet.appendRow([resId, now, '', '', '']);
+  } else {
+    sheet.getRange(row, 2).setValue(now);
+  }
+  return { ok: true, resId: resId, checkedInAt: now };
+}
+
+function earlyCheckout_(body) {
+  const resId = String(body.resId || '');
+  if (!resId) return { ok: false, error: 'Missing resId' };
+
+  const sheet = getOrCreateStatusSheet_();
+  const row = findStatusRow_(sheet, resId);
+  const now = new Date().toISOString();
+  const isEarly = !!body.isEarly;
+  const newCheckout = String(body.newCheckout || '');
+
+  if (row === -1) {
+    sheet.appendRow([resId, '', now, isEarly ? 'TRUE' : 'FALSE', newCheckout]);
+  } else {
+    sheet.getRange(row, 3).setValue(now);
+    sheet.getRange(row, 4).setValue(isEarly ? 'TRUE' : 'FALSE');
+    sheet.getRange(row, 5).setValue(newCheckout);
+  }
+  return { ok: true, resId: resId, checkedOutAt: now };
+}
+
+function getCheckStatusMap_() {
+  const sheet = getOrCreateStatusSheet_();
+  const data = sheet.getDataRange().getValues();
+  const map = {};
+  for (let i = 1; i < data.length; i++) {
+    const resId = String(data[i][0] || '');
+    if (!resId) continue;
+    map[resId] = {
+      checkedInAt: data[i][1] || '',
+      checkedOutAt: data[i][2] || '',
+    };
+  }
+  return map;
 }
 
 function doGet_(e) {
@@ -501,16 +585,23 @@ function getRoomStatus_() {
   const header = data[0];
   const rows = data.slice(1).filter(r => r.join('').trim() !== '');
   const idx = indexMap_(header, ['เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์', 'Channel', 'ResId', 'Note']);
+  const statusMap = getCheckStatusMap_();
 
-  const stays = rows.map(r => ({
-    room:     String(r[idx['เลขห้อง']] || '').trim(),
-    guest:    String(r[idx['ชื่อแขก']] || '').trim(),
-    checkin:  formatCellDate_(r[idx['เช็คอิน']]),
-    checkout: formatCellDate_(r[idx['เช็คเอาท์']]),
-    channel:  String(r[idx.Channel] || '').trim(),
-    resId:    String(r[idx.ResId] || '').trim(),
-    note:     String(r[idx.Note] || '').trim(),
-  })).filter(s => s.checkin && s.checkout);
+  const stays = rows.map(r => {
+    const resId = String(r[idx.ResId] || '').trim();
+    const st = statusMap[resId] || {};
+    return {
+      room:         String(r[idx['เลขห้อง']] || '').trim(),
+      guest:        String(r[idx['ชื่อแขก']] || '').trim(),
+      checkin:      formatCellDate_(r[idx['เช็คอิน']]),
+      checkout:     formatCellDate_(r[idx['เช็คเอาท์']]),
+      channel:      String(r[idx.Channel] || '').trim(),
+      resId:        resId,
+      note:         String(r[idx.Note] || '').trim(),
+      checkedInAt:  st.checkedInAt || '',
+      checkedOutAt: st.checkedOutAt || '',
+    };
+  }).filter(s => s.checkin && s.checkout);
 
   return { today: formatDateYMD_(new Date()), stays };
 }
