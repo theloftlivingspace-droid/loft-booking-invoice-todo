@@ -76,26 +76,41 @@ function doPost(e) {
   }
 }
 
-// Drive folder that stores all check-in/out documents (passports, TM30, etc).
-// All uploads live in this single folder; the Docs sheet tracks per-booking association.
-const DOCS_DRIVE_FOLDER_ID = '1fc3X-hmf1tUyCxTAbG6HxAN0qzrNyj4H'; // confirmed real "CheckInOut Documents" folder
-const DOCS_SHEET_NAME = 'Docs';
+// "Loft Documents" root folder — contains ONE SUBFOLDER PER BOOKING, named
+// exactly "{roomNum}_{checkin}_{resId}" (matching folderKey() in CheckInOut.tsx).
+// This is the folder structure that was actually in use all along; the flat
+// single-folder + separate 'Docs' sheet scheme below it (in git history) was
+// a wrong re-implementation that never saw any of the pre-existing documents.
+const DOCS_ROOT_FOLDER_ID = '1fc3X-hmf1tUyCxTAbG6HxAN0qzrNyj4H'; // "Loft Documents"
+const DOCS_SHEET_NAME = 'Docs'; // kept only as a supplementary upload log, not the source of truth
 
-function getOrCreateDocsFolder_() {
-  try {
-    return DriveApp.getFolderById(DOCS_DRIVE_FOLDER_ID);
-  } catch (err) {
-    // Folder ID not set up yet — create one under the source spreadsheet's parent folder
-    // and log the ID so it can be hardcoded above for future calls.
-    const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
-    const parents = DriveApp.getFileById(ss.getId()).getParents();
-    const parentFolder = parents.hasNext() ? parents.next() : DriveApp.getRootFolder();
-    const existing = parentFolder.getFoldersByName('CheckInOut Documents');
-    if (existing.hasNext()) return existing.next();
-    const created = parentFolder.createFolder('CheckInOut Documents');
-    Logger.log('Created docs folder — update DOCS_DRIVE_FOLDER_ID to: ' + created.getId());
-    return created;
-  }
+function getDocsRootFolder_() {
+  return DriveApp.getFolderById(DOCS_ROOT_FOLDER_ID);
+}
+
+function docsKey_(room, checkin, resId) {
+  return String(room || '') + '_' + formatCellDate_(checkin) + '_' + (String(resId) || 'noid');
+}
+
+function getOrCreateBookingDocsFolder_(room, checkin, resId) {
+  const root = getDocsRootFolder_();
+  const key = docsKey_(room, checkin, resId);
+  const existing = root.getFoldersByName(key);
+  if (existing.hasNext()) return existing.next();
+  return root.createFolder(key);
+}
+
+function fileToDocFile_(f) {
+  const fileId = f.getId();
+  return {
+    fileId: fileId,
+    fileName: f.getName(),
+    mimeType: f.getMimeType(),
+    url: 'https://drive.google.com/file/d/' + fileId + '/view',
+    downloadUrl: 'https://drive.google.com/uc?export=download&id=' + fileId,
+    previewUrl: 'https://drive.google.com/file/d/' + fileId + '/preview',
+    uploadedAt: f.getDateCreated().toISOString(),
+  };
 }
 
 function getOrCreateDocsSheet_() {
@@ -128,15 +143,17 @@ function uploadDoc_(body) {
     return { ok: false, error: 'Invalid base64 data: ' + String(err) };
   }
 
-  const folder = getOrCreateDocsFolder_();
+  const folder = getOrCreateBookingDocsFolder_(room, checkin, resId);
   const file = folder.createFile(blob);
   file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
 
   const fileId = file.getId();
   const uploadedAt = new Date().toISOString();
 
-  const sheet = getOrCreateDocsSheet_();
-  sheet.appendRow([resId, room, checkin, fileId, fileName, mimeType, uploadedAt]);
+  // supplementary log only — not read back by getAllDocs_
+  try {
+    getOrCreateDocsSheet_().appendRow([resId, room, checkin, fileId, fileName, mimeType, uploadedAt]);
+  } catch (e) { /* non-fatal */ }
 
   return {
     ok: true,
@@ -160,37 +177,31 @@ function deleteDoc_(body) {
     return { ok: false, error: 'Could not delete file: ' + String(err) };
   }
 
-  const sheet = getOrCreateDocsSheet_();
-  const data = sheet.getDataRange().getValues();
-  for (let i = data.length - 1; i >= 1; i--) {
-    if (data[i][3] === fileId) { // FileId column
-      sheet.deleteRow(i + 1);
-      break;
+  try {
+    const sheet = getOrCreateDocsSheet_();
+    const data = sheet.getDataRange().getValues();
+    for (let i = data.length - 1; i >= 1; i--) {
+      if (data[i][3] === fileId) { sheet.deleteRow(i + 1); break; }
     }
-  }
+  } catch (e) { /* non-fatal */ }
 
   return { ok: true };
 }
 
 function getAllDocs_() {
-  const sheet = getOrCreateDocsSheet_();
-  const data = sheet.getDataRange().getValues();
-  const docs = {}; // "{room}_{checkin}_{resId}" -> DocFile[]  (must match frontend's folderKey())
+  const root = getDocsRootFolder_();
+  const subfolders = root.getFolders();
+  const docs = {}; // "{room}_{checkin}_{resId}" -> DocFile[]  (matches folderKey() in CheckInOut.tsx)
 
-  for (let i = 1; i < data.length; i++) {
-    const [resId, room, checkin, fileId, fileName, mimeType, uploadedAt] = data[i];
-    if (!resId || !fileId) continue;
-    const key = String(room || '') + '_' + formatCellDate_(checkin) + '_' + (String(resId) || 'noid');
-    if (!docs[key]) docs[key] = [];
-    docs[key].push({
-      fileId: fileId,
-      fileName: fileName,
-      mimeType: mimeType,
-      url: 'https://drive.google.com/file/d/' + fileId + '/view',
-      downloadUrl: 'https://drive.google.com/uc?export=download&id=' + fileId,
-      previewUrl: 'https://drive.google.com/file/d/' + fileId + '/preview',
-      uploadedAt: uploadedAt,
-    });
+  while (subfolders.hasNext()) {
+    const sub = subfolders.next();
+    const key = sub.getName();
+    const files = sub.getFiles();
+    const list = [];
+    while (files.hasNext()) {
+      list.push(fileToDocFile_(files.next()));
+    }
+    if (list.length) docs[key] = list;
   }
 
   return { ok: true, docs: docs };
@@ -275,17 +286,31 @@ function getCheckStatusMap_() {
 }
 
 /* ============================================================
- *  TEMP DEBUG — scan the Drive folder directly (bypasses the Docs
- *  sheet entirely) to check whether uploaded files still physically
- *  exist even if their sheet row was lost. Safe to remove later.
+ *  TEMP DEBUG — inspect the real "Loft Documents" root: how many
+ *  per-booking subfolders exist, and whether any files are sitting
+ *  loose directly in the root (stray uploads from before this fix).
+ *  Safe/read-only. Can be removed later.
  * ============================================================ */
 function debugScanDocsFolder_() {
-  const folder = getOrCreateDocsFolder_();
-  const files = folder.getFiles();
-  const driveFiles = [];
-  while (files.hasNext()) {
-    const f = files.next();
-    driveFiles.push({
+  const root = getDocsRootFolder_();
+
+  const subfolders = root.getFolders();
+  const subfolderInfo = [];
+  let totalFilesInSubfolders = 0;
+  while (subfolders.hasNext()) {
+    const sub = subfolders.next();
+    const files = sub.getFiles();
+    let count = 0;
+    while (files.hasNext()) { files.next(); count++; }
+    totalFilesInSubfolders += count;
+    subfolderInfo.push({ name: sub.getName(), fileCount: count });
+  }
+
+  const rootFiles = root.getFiles();
+  const strayFilesInRoot = [];
+  while (rootFiles.hasNext()) {
+    const f = rootFiles.next();
+    strayFilesInRoot.push({
       fileId: f.getId(),
       fileName: f.getName(),
       createdAt: f.getDateCreated().toISOString(),
@@ -293,25 +318,49 @@ function debugScanDocsFolder_() {
     });
   }
 
-  const sheet = getOrCreateDocsSheet_();
-  const data = sheet.getDataRange().getValues();
-  const knownFileIds = {};
-  for (let i = 1; i < data.length; i++) {
-    const fileId = data[i][3];
-    if (fileId) knownFileIds[fileId] = true;
-  }
-
-  const orphaned = driveFiles.filter(f => !knownFileIds[f.fileId]);
-
   return {
     ok: true,
-    folderId: folder.getId(),
-    folderUrl: folder.getUrl(),
-    totalFilesInDrive: driveFiles.length,
-    totalRowsInSheet: Math.max(0, data.length - 1),
-    orphanedFiles: orphaned, // in Drive but NOT in the Docs sheet — recoverable
-    allDriveFiles: driveFiles,
+    rootFolderId: root.getId(),
+    rootFolderUrl: root.getUrl(),
+    totalSubfolders: subfolderInfo.length,
+    totalFilesInSubfolders: totalFilesInSubfolders,
+    subfolders: subfolderInfo,
+    strayFilesInRoot: strayFilesInRoot, // uploaded before the folder-structure fix — need migrating
   };
+}
+
+/* One-time cleanup: move any files sitting loose in the root folder into
+ * their correct per-booking subfolder, using the Docs sheet log (which
+ * still recorded resId/room/checkin for every upload) to know where each
+ * stray file belongs. Safe to call multiple times — already-migrated
+ * files won't be in the root anymore. */
+function migrateStrayRootFiles_() {
+  const root = getDocsRootFolder_();
+  const sheet = getOrCreateDocsSheet_();
+  const data = sheet.getDataRange().getValues();
+
+  const infoByFileId = {};
+  for (let i = 1; i < data.length; i++) {
+    const [resId, room, checkin, fileId] = data[i];
+    if (fileId) infoByFileId[fileId] = { resId, room, checkin };
+  }
+
+  const rootFiles = root.getFiles();
+  const moved = [];
+  const skipped = [];
+  while (rootFiles.hasNext()) {
+    const f = rootFiles.next();
+    const fileId = f.getId();
+    const info = infoByFileId[fileId];
+    if (!info) { skipped.push({ fileId: fileId, fileName: f.getName(), reason: 'no matching Docs sheet row' }); continue; }
+
+    const target = getOrCreateBookingDocsFolder_(info.room, info.checkin, info.resId);
+    target.addFile(f);
+    root.removeFile(f);
+    moved.push({ fileId: fileId, fileName: f.getName(), movedTo: target.getName() });
+  }
+
+  return { ok: true, moved: moved, skipped: skipped };
 }
 
 function doGet_(e) {
@@ -331,6 +380,10 @@ function doGet_(e) {
 
   if (action === 'debugScanDocsFolder') {
     return jsonResponse_(debugScanDocsFolder_());
+  }
+
+  if (action === 'debugMigrateStrayFiles') {
+    return jsonResponse_(migrateStrayRootFiles_());
   }
 
   if (action === 'setBookingDone') {
