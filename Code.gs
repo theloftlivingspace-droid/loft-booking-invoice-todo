@@ -175,13 +175,14 @@ function deleteDoc_(body) {
 function getAllDocs_() {
   const sheet = getOrCreateDocsSheet_();
   const data = sheet.getDataRange().getValues();
-  const docs = {}; // resId -> DocFile[]
+  const docs = {}; // "{room}_{checkin}_{resId}" -> DocFile[]  (must match frontend's folderKey())
 
   for (let i = 1; i < data.length; i++) {
-    const [resId, , , fileId, fileName, mimeType, uploadedAt] = data[i];
+    const [resId, room, checkin, fileId, fileName, mimeType, uploadedAt] = data[i];
     if (!resId || !fileId) continue;
-    if (!docs[resId]) docs[resId] = [];
-    docs[resId].push({
+    const key = String(room || '') + '_' + formatCellDate_(checkin) + '_' + (String(resId) || 'noid');
+    if (!docs[key]) docs[key] = [];
+    docs[key].push({
       fileId: fileId,
       fileName: fileName,
       mimeType: mimeType,
