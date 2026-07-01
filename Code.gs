@@ -78,7 +78,7 @@ function doPost(e) {
 
 // Drive folder that stores all check-in/out documents (passports, TM30, etc).
 // All uploads live in this single folder; the Docs sheet tracks per-booking association.
-const DOCS_DRIVE_FOLDER_ID = '1a2b3c4d5e6f7g8h9i0jKLMNOPQRSTUVWXYZ'; // placeholder — replace with real folder ID
+const DOCS_DRIVE_FOLDER_ID = '1fc3X-hmf1tUyCxTAbG6HxAN0qzrNyj4H'; // confirmed real "CheckInOut Documents" folder
 const DOCS_SHEET_NAME = 'Docs';
 
 function getOrCreateDocsFolder_() {
