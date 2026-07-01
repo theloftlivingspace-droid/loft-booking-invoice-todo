@@ -227,6 +227,12 @@ function doGet_(e) {
     return jsonResponse_(result);
   }
 
+  if (action === 'cancelBooking') {
+    const id = e.parameter.id || '';
+    const result = cancelBooking_(id);
+    return jsonResponse_(result);
+  }
+
   // Default: serve HTML webapp
   const template = HtmlService.createTemplateFromFile('Index');
   return template.evaluate()
@@ -661,6 +667,30 @@ function setBookingNote(resId, note) {
       src.getRange(i + 1, idx.Note + 1).setValue(note);
       triggerStyleSheet1_();
       return { ok: true };
+    }
+  }
+  return { ok: false, error: 'resId not found: ' + resId };
+}
+
+function cancelBooking_(resId) {
+  if (!resId) return { ok: false, error: 'resId required' };
+  const ss  = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
+  if (!src) return { ok: false, error: 'Sheet1 not found' };
+  const data   = src.getDataRange().getValues();
+  const header = data[0];
+  const idx    = indexMap_(header, ['ResId', 'เลขห้อง']);
+  if (idx.ResId < 0) return { ok: false, error: 'ResId column not found' };
+  if (idx['เลขห้อง'] < 0) return { ok: false, error: 'เลขห้อง column not found' };
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][idx.ResId] || '').trim() === resId) {
+      const currentRoom = String(data[i][idx['เลขห้อง']] || '').trim();
+      // ถ้า mark ยกเลิกแล้วให้ข้าม (idempotent)
+      if (/ยกเลิก|cancel/i.test(currentRoom)) return { ok: true, alreadyCancelled: true };
+      const newRoom = currentRoom + ' ยกเลิก';
+      src.getRange(i + 1, idx['เลขห้อง'] + 1).setValue(newRoom);
+      triggerStyleSheet1_();
+      return { ok: true, room: newRoom };
     }
   }
   return { ok: false, error: 'resId not found: ' + resId };
