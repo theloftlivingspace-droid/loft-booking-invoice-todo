@@ -25,5 +25,8 @@ jobs:
       - name: Push to Apps Script
         run: clasp push --force
 
-      - name: Deploy new version (update existing deployment)
+      - name: Deploy new version (todo endpoint)
         run: clasp deploy --deploymentId AKfycbxHuLVbrYnMS2aMEFUppdpKfwfby6Kn4lqD8MDHFwMf7BFIaUlv6NywAzTB-tH-IXs --description "Auto-deploy from GitHub Actions ${{ github.sha }}"
+
+      - name: Deploy new version (checkinout endpoint)
+        run: clasp deploy --deploymentId AKfycbzb5T7x7qBw35LwX_bufF9oDjMRQAkI2WAqukQqkH4tNjyhCy-CCuWDDmPaiwxbN6M --description "Auto-deploy from GitHub Actions ${{ github.sha }}"
