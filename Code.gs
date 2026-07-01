@@ -815,7 +815,7 @@ function cancelBooking_(resId) {
   if (!src) return { ok: false, error: 'Sheet1 not found' };
   const data   = src.getDataRange().getValues();
   const header = data[0];
-  const idx    = indexMap_(header, ['ResId', 'เลขห้อง']);
+  const idx    = indexMap_(header, ['ResId', 'เลขห้อง', 'เช็คเอาท์']);
   if (idx.ResId < 0) return { ok: false, error: 'ResId column not found' };
   if (idx['เลขห้อง'] < 0) return { ok: false, error: 'เลขห้อง column not found' };
   for (var i = 1; i < data.length; i++) {
@@ -824,9 +824,14 @@ function cancelBooking_(resId) {
       // ถ้า mark ยกเลิกแล้วให้ข้าม (idempotent)
       if (/ยกเลิก|cancel/i.test(currentRoom)) return { ok: true, alreadyCancelled: true };
       const newRoom = currentRoom + ' ยกเลิก';
+      // เปลี่ยน checkout เป็นวันนี้ (Bangkok) เพื่อปลดล็อคห้องให้จองใหม่ได้ทันที
+      var todayBKK = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
       src.getRange(i + 1, idx['เลขห้อง'] + 1).setValue(newRoom);
+      if (idx['เช็คเอาท์'] >= 0) {
+        src.getRange(i + 1, idx['เช็คเอาท์'] + 1).setValue(todayBKK);
+      }
       triggerStyleSheet1_();
-      return { ok: true, room: newRoom };
+      return { ok: true, room: newRoom, checkoutUpdated: todayBKK };
     }
   }
   return { ok: false, error: 'resId not found: ' + resId };
