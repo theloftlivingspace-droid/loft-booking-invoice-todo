@@ -656,7 +656,7 @@ function getInvoiceToCreate_(ss, todayStr) {
         detectedToday: detectedDate === todayStr,
         firstSeen, isNewInList: isNewSeen,
         done: !!doneMap[invoiceKey],
-        matchKeys: makeMatchKeys_(entryGuest, checkin, entryRoom),
+        matchKeys: makeMatchKeys_(entryGuest, entryCheckin, entryRoom),
       });
     });
   });
