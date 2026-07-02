@@ -868,7 +868,7 @@ function cancelBooking_(resId) {
   if (!src) return { ok: false, error: 'Sheet1 not found' };
   const data   = src.getDataRange().getValues();
   const header = data[0];
-  const idx    = indexMap_(header, ['ResId', 'เลขห้อง', 'เช็คเอาท์']);
+  const idx    = indexMap_(header, ['ResId', 'เลขห้อง', 'เช็คเอาท์', 'ชื่อแขก', 'เช็คอิน']);
   if (idx.ResId < 0) return { ok: false, error: 'ResId column not found' };
   if (idx['เลขห้อง'] < 0) return { ok: false, error: 'เลขห้อง column not found' };
   for (var i = 1; i < data.length; i++) {
@@ -884,6 +884,21 @@ function cancelBooking_(resId) {
         src.getRange(i + 1, idx['เช็คเอาท์'] + 1).setValue(todayBKK);
       }
       triggerStyleSheet1_();
+      // แจ้งกลุ่มแม่บ้านผ่าน LINE bot
+      try {
+        var props     = PropertiesService.getScriptProperties();
+        var botUrl    = props.getProperty('BOT_URL')   || 'https://hotel-line-bot.onrender.com';
+        var adminTok  = props.getProperty('ADMIN_TOKEN') || 'apt2025@secret';
+        var guest     = String(data[i][idx['ชื่อแขก']] || '').trim();
+        var checkin   = idx['เช็คอิน']  >= 0 ? String(data[i][idx['เช็คอิน']]  || '').trim() : '';
+        UrlFetchApp.fetch(botUrl + '/api/cancel-notify', {
+          method: 'post',
+          contentType: 'application/json',
+          payload: JSON.stringify({ room: currentRoom, guest: guest, checkin: checkin, checkout: todayBKK }),
+          headers: { 'x-admin-token': adminTok },
+          muteHttpExceptions: true
+        });
+      } catch(e) { Logger.log('LINE notify error: ' + e); }
       return { ok: true, room: newRoom, checkoutUpdated: todayBKK };
     }
   }
