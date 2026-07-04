@@ -591,16 +591,17 @@ function getInvoiceToCreate_(ss, todayStr) {
 
     // parse ทุก "Guest(conf) NET ฿amount" entry จาก notes
     // ทุก case: conf เดียว, conf ต่างกัน, conf ซ้ำ (split payout เช่น Nihel 81.17 + 2638.54)
-    // รองรับ "Adjustment -฿22.07" และ "Adjustment NET -฿22.07" ด้วย (ไม่งั้น sub entry
-    // ที่เป็นยอดลบ/adjustment จะหายไปจาก parsing เงียบๆ ทำให้ split ไม่ครบ — bug 2026-07-04 Nihel)
-    const subPattern = /([^|]+?)\(([^)]+)\)\s*(?:Adjustment\s+)?(?:NET\s+)?(-)?\s*฿([\d,]+\.?\d*)/g;
+    // รองรับเครื่องหมายลบทั้งก่อน฿ ("Adjustment -฿22.07") และหลัง฿ ("NET ฿-22.07"
+    // ซึ่งเป็นรูปแบบจริงที่ parseAirbnbEmail เขียนลง sheet) — ไม่งั้น sub entry ที่เป็น
+    // adjustment ลบจะหายไปจาก parsing เงียบๆ ทำให้ split ไม่ครบ — bug 2026-07-04 Nihel
+    const subPattern = /([^|]+?)\(([^)]+)\)\s*(?:Adjustment\s+)?(?:NET\s+)?(-)?\s*฿(-)?([\d,]+\.?\d*)/g;
     const subs = [];
     let m;
     while ((m = subPattern.exec(notes)) !== null) {
       const _conf = m[2].trim();
       const _sub = subCiMap[_conf] || {};
-      const _sign = m[3] === '-' ? -1 : 1;
-      subs.push({ guest: m[1].trim(), confCode: _conf, net: _sign * parseFloat(m[4].replace(/,/g,'')), ci: _sub.ci || '', co: _sub.co || '', nights: _sub.nights || '' });
+      const _sign = (m[3] === '-' || m[4] === '-') ? -1 : 1;
+      subs.push({ guest: m[1].trim(), confCode: _conf, net: _sign * parseFloat(m[5].replace(/,/g,'')), ci: _sub.ci || '', co: _sub.co || '', nights: _sub.nights || '' });
     }
 
     const entries = subs.length > 0 ? subs : [{ guest: firstGuest, confCode: firstConfCode, net: totalNet }];
