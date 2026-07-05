@@ -254,12 +254,14 @@ function earlyCheckout_(body) {
   const resId = String(body.resId || '');
   if (!resId) return { ok: false, error: 'Missing resId' };
 
-  const sheet = getOrCreateStatusSheet_();
-  const row = findStatusRow_(sheet, resId);
   const now = new Date().toISOString();
   const isEarly = !!body.isEarly;
-  const newCheckout = String(body.newCheckout || '');
+  const todayBKK = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
+  const newCheckout = String(body.newCheckout || todayBKK);
 
+  // 1) Log to the CheckStatus sheet (existing behavior — per-device/audit trail)
+  const sheet = getOrCreateStatusSheet_();
+  const row = findStatusRow_(sheet, resId);
   if (row === -1) {
     sheet.appendRow([resId, '', now, isEarly ? 'TRUE' : 'FALSE', newCheckout]);
   } else {
@@ -267,7 +269,34 @@ function earlyCheckout_(body) {
     sheet.getRange(row, 4).setValue(isEarly ? 'TRUE' : 'FALSE');
     sheet.getRange(row, 5).setValue(newCheckout);
   }
-  return { ok: true, resId: resId, checkedOutAt: now };
+
+  // 2) Also update the real checkout date in Sheet1 (Loft_Reservations_Master)
+  //    so occupancy/availability reflects the checkout immediately, not just
+  //    the CheckStatus log.
+  var sheet1Updated = false;
+  try {
+    const ss  = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+    const src = ss.getSheetByName(SRC_BOOKING_SHEET);
+    if (src) {
+      const data   = src.getDataRange().getValues();
+      const header = data[0];
+      const idx    = indexMap_(header, ['ResId', 'เช็คเอาท์']);
+      if (idx.ResId >= 0 && idx['เช็คเอาท์'] >= 0) {
+        for (var i = 1; i < data.length; i++) {
+          if (String(data[i][idx.ResId] || '').trim() === resId) {
+            src.getRange(i + 1, idx['เช็คเอาท์'] + 1).setValue(newCheckout);
+            sheet1Updated = true;
+            break;
+          }
+        }
+      }
+    }
+    if (sheet1Updated) triggerStyleSheet1_();
+  } catch (e) {
+    Logger.log('earlyCheckout_ Sheet1 update error: ' + e);
+  }
+
+  return { ok: true, resId: resId, checkedOutAt: now, newCheckout: newCheckout, sheet1Updated: sheet1Updated };
 }
 
 function getCheckStatusMap_() {
