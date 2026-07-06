@@ -671,11 +671,21 @@ function getInvoiceToCreate_(ss, todayStr) {
         seenChanged = true; isNewSeen = true;
       }
       const entryGuest = entry.guest || firstGuest;
-      const entryRoom = (entries.length > 1 && roomList.length > 1) ? findRoomForGuest(entryGuest, entry.ci) : room;
       // ใช้ ci/co/nights ของ entry (จาก sub-row) ถ้ามี ไม่งั้น fallback total row
       const entryCheckin  = (entries.length > 1 && entry.ci)      ? entry.ci      : checkin;
       const entryCheckout = (entries.length > 1 && entry.co)      ? entry.co      : checkout;
       const entryNights   = (entries.length > 1 && entry.nights)  ? entry.nights  : nights;
+      // Look up the real room whenever we have >1 possible room to disambiguate
+      // (multi-guest payout, see comment above), OR whenever the parsed "ห้อง"
+      // field itself is unusable (e.g. literal "?" — parser couldn't read it
+      // off the OTA email at all). Previously this fallback only ran for
+      // multi-guest split entries, so a single-guest row with room="?" had no
+      // way to ever resolve — it just stayed "?" forever, even when a clear
+      // name+date match existed in Sheet1 (bug 2026-07-06: 佰顺's non-refundable
+      // cancellation payout, conf HMFTY4YTTK, stuck at "ห้อง ?" despite the
+      // cancelled booking ABB-e4bdb0e9a1-20260705 being an exact name+date match).
+      const roomNeedsLookup = (entries.length > 1 && roomList.length > 1) || !roomNum_(room);
+      const entryRoom = roomNeedsLookup ? findRoomForGuest(entryGuest, entryCheckin) : room;
       out.push({
         invoiceKey, bookingId, room: entryRoom,
         guest: entryGuest,
