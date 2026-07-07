@@ -280,12 +280,30 @@ function earlyCheckout_(body) {
     if (src) {
       const data   = src.getDataRange().getValues();
       const header = data[0];
-      const idx    = indexMap_(header, ['ResId', 'เช็คเอาท์']);
+      const idx    = indexMap_(header, ['ResId', 'เลขห้อง', 'เช็คเอาท์', 'ชื่อแขก', 'เช็คอิน']);
       if (idx.ResId >= 0 && idx['เช็คเอาท์'] >= 0) {
         for (var i = 1; i < data.length; i++) {
           if (String(data[i][idx.ResId] || '').trim() === resId) {
             src.getRange(i + 1, idx['เช็คเอาท์'] + 1).setValue(newCheckout);
             sheet1Updated = true;
+
+            // แจ้งกลุ่มแม่บ้านผ่าน LINE bot ว่ามี checkout ก่อนกำหนด
+            try {
+              var props    = PropertiesService.getScriptProperties();
+              var botUrl   = props.getProperty('BOT_URL')   || 'https://hotel-line-bot.onrender.com';
+              var adminTok = props.getProperty('ADMIN_TOKEN') || 'apt2025@secret';
+              var roomNum  = idx['เลขห้อง'] >= 0 ? String(data[i][idx['เลขห้อง']] || '').trim() : '';
+              var guest    = idx['ชื่อแขก']  >= 0 ? String(data[i][idx['ชื่อแขก']]  || '').trim() : '';
+              var checkin  = idx['เช็คอิน']  >= 0 ? String(data[i][idx['เช็คอิน']]  || '').trim() : '';
+              UrlFetchApp.fetch(botUrl + '/api/checkout-notify', {
+                method: 'post',
+                contentType: 'application/json',
+                payload: JSON.stringify({ room: roomNum, guest: guest, checkin: checkin, checkout: newCheckout }),
+                headers: { 'x-admin-token': adminTok },
+                muteHttpExceptions: true
+              });
+            } catch (e) { Logger.log('checkout-notify LINE error: ' + e); }
+
             break;
           }
         }
