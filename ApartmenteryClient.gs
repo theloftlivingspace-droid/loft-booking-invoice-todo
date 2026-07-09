@@ -261,6 +261,8 @@ function createApartmenteryBooking(branchId, unitId, opts) {
     if (match) {
       return { bookingId: match[1], location: location };
     }
+    Logger.log(`createApartmenteryBooking: got redirect (HTTP ${code}) but Location header ` +
+      `didn't match expected pattern. Raw Location: "${location}"`);
   }
 
   // Diagnostic logging — payload sent + the actual error message from
