@@ -29,7 +29,11 @@ function testApartmenteryFullFlow_() {
   const room = '205';
   const startDate = '2026-09-01';
   const endDate = '2026-09-03';
-  const testGuestName = 'TEST DELETE ME - Claude Test';
+  // Plain name, no dash — matches what was confirmed to work when created
+  // manually in the apartmentery web UI with the same room/dates. The
+  // previous attempt used "TEST DELETE ME - Claude Test" (with a dash) and
+  // got HTTP 500; this run isolates whether the dash was the actual cause.
+  const testGuestName = 'Test Guest';
   const testRentalPrice = 1000;
 
   Logger.log(`[TEST] Step 1: creating booking for room ${room}, ${startDate} to ${endDate}`);
@@ -38,7 +42,7 @@ function testApartmenteryFullFlow_() {
     startDate: startDate,
     endDate: endDate,
     guestName: testGuestName,
-    note: 'TEST DELETE ME - automated flow test'
+    note: ''
   });
 
   if (bookingResult && bookingResult.skipped) {
