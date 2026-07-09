@@ -368,12 +368,37 @@ function createApartmenteryInvoice(branchId, unitId, bookingId, rentalPrice, dat
   const dateToPay = dateToPayStr || Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
 
   const path = `/user/branch/${branchId}/unit/${unitId}/booking/${bookingId}/invoice/add`;
+
+  // Same root cause as createApartmenteryBooking above: the invoice form's
+  // elect/water/other-charge/withholding/promptpay fields are plain
+  // select/input elements that a real browser always submits, even when
+  // hidden by CSS (electType/waterType 'no', empty other1-7 rows, etc).
+  // Confirmed 2026-07-09: sending only 5 fields (as before) causes a 500 on
+  // every invoice. Sending the form's own defaults for all of them keeps
+  // the original intent (no electric/water charge, no extra line items,
+  // no withholding, no PromptPay) but reproduces a real form submission.
   const payload = {
     dateToPay: dateToPay,
     rentalPrice: String(rentalPrice),
     electType: 'no',
+    electFromStr: '',
+    electToStr: '',
+    electPricePerUnit: '',
     waterType: 'no',
-    'invoiceNote.type': 'default'
+    waterFromStr: '',
+    waterToStr: '',
+    waterPricePerUnit: '',
+    'other1.desc': '', 'other1.price': '',
+    'other2.desc': '', 'other2.price': '',
+    'other3.desc': '', 'other3.price': '',
+    'other4.desc': '', 'other4.price': '',
+    'other5.desc': '', 'other5.price': '',
+    'other6.desc': '', 'other6.price': '',
+    'other7.desc': '', 'other7.price': '',
+    'withholdingPercent.value': '',
+    'promptPayId.value': '',
+    'invoiceNote.type': 'default',
+    'invoiceNote.value': ''
   };
 
   const response = _apartmenteryFetch_(path, { method: 'post', payload: payload });
