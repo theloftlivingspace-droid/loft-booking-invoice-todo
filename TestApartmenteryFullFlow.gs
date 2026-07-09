@@ -27,8 +27,8 @@ function runTestApartmenteryFullFlow() {
 
 function testApartmenteryFullFlow_() {
   const room = '205';
-  const startDate = '2026-09-20';
-  const endDate = '2026-09-22';
+  const startDate = '2026-09-25';
+  const endDate = '2026-09-27';
   // apartmentery flags a "new" customer as a duplicate of an existing one
   // when the name matches and both idNo/mobile are blank (confirmed
   // 2026-07-09 — this is what killed the previous test run, name collided
