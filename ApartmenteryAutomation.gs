@@ -63,6 +63,17 @@ function runAddApartmenteryBookingIdColumn() {
 const APARTMENTERY_BOOKING_ID_COL_HEADER = 'Apartmentery Booking ID';
 
 /**
+ * dateStr - 1 day, both YYYY-MM-DD. Built in UTC (not Asia/Bangkok) so the
+ * subtraction never shifts across a DST-less, whole-day boundary weirdly —
+ * this is pure calendar-date arithmetic, no time-of-day involved.
+ */
+function _dateMinusOneDay_(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() - 1);
+  return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd');
+}
+
+/**
  * Adds the "Apartmentery Booking ID" column to Sheet1 if it isn't there
  * yet. Idempotent — safe to call on every run (cheap no-op if present).
  */
@@ -129,17 +140,20 @@ function autoCreateApartmenteryBookings() {
   // apartmentery refuses to create a booking whose startDate equals another
   // booking's checkout date on the same room (same-day turnover) — confirmed
   // 2026-07-09, this is the cause of the generic HTTP 500 "Oops, an error
-  // occurred" page apartmentery returns for these, with no detail in the
-  // response to detect it from. Build a per-room set of checkout dates up
-  // front so we can skip these cleanly instead of hitting that wall (and
-  // re-logging the same unhelpful error) on every run.
-  const checkoutsByRoom = {};
+  // occurred" page apartmentery returns for these, with no way around it via
+  // a different payload (reproduced the same block with a real browser
+  // submission too). Nathan's existing manual workaround is to shorten the
+  // outgoing booking's endDate by 1 day on apartmentery before creating the
+  // new one — automate that instead of just skipping. Build a per-room map
+  // of checkout-date -> resId up front so we know which outgoing booking to
+  // shrink for each turnover we hit below.
+  const outgoingByRoom = {};
   items.forEach(x => {
     if (/ยกเลิก|cancel/i.test(x.room)) return; // cancelled stays don't occupy the room
     if (!x.checkout) return;
     const rn = roomNum_(x.room);
-    if (!checkoutsByRoom[rn]) checkoutsByRoom[rn] = new Set();
-    checkoutsByRoom[rn].add(x.checkout);
+    if (!outgoingByRoom[rn]) outgoingByRoom[rn] = {};
+    outgoingByRoom[rn][x.checkout] = x.resId;
   });
 
   for (const b of items) {
@@ -148,12 +162,36 @@ function autoCreateApartmenteryBookings() {
     if (/ยกเลิก|cancel/i.test(b.room)) { Logger.log(`skip ${b.resId} (${b.room}): cancelled`); continue; }
     if (getApartmenteryBookingId_(b.resId)) { Logger.log(`skip ${b.resId} (${b.room}): already has apartmentery bookingId`); continue; }
 
-    const roomCheckouts = checkoutsByRoom[roomNum_(b.room)];
-    if (roomCheckouts && roomCheckouts.has(b.checkin)) {
-      Logger.log(`skip ${b.resId} (${b.room}): same-day turnover — another guest checks out ${b.checkin} ` +
-        `(apartmentery blocks this; create manually once the outgoing guest is checked out)`);
-      result.skipped++;
-      continue;
+    const roomOutgoing = outgoingByRoom[roomNum_(b.room)];
+    const outgoingResId = roomOutgoing && roomOutgoing[b.checkin];
+    if (outgoingResId && outgoingResId !== b.resId) {
+      const outgoingAptId = getApartmenteryBookingId_(outgoingResId);
+      if (!outgoingAptId) {
+        // Outgoing booking hasn't been created on apartmentery yet, so there's
+        // nothing to shrink — creating the new one would still 500. Skip for
+        // now; next run picks this up once the outgoing booking exists.
+        Logger.log(`skip ${b.resId} (${b.room}): same-day turnover with ${outgoingResId}, ` +
+          `but that booking has no apartmentery bookingId yet — nothing to shrink. Will retry next run.`);
+        result.skipped++;
+        continue;
+      }
+      try {
+        const newEndDate = _dateMinusOneDay_(b.checkin);
+        Logger.log(`same-day turnover: shrinking ${outgoingResId} (${b.room}) apartmentery ` +
+          `bookingId ${outgoingAptId} endDate to ${newEndDate} before creating ${b.resId}`);
+        updateApartmenteryBookingEndDateForRoom(b.room, outgoingAptId, newEndDate);
+      } catch (err) {
+        if (isApartmenterySessionExpiredError(err)) {
+          Logger.log(`SESSION EXPIRED while shrinking endDate for ${outgoingResId} (${b.room}): ${err.message}`);
+          result.sessionExpired = true;
+          break; // stop the whole run — see file header
+        }
+        Logger.log(`skip ${b.resId} (${b.room}): failed to shrink outgoing booking ${outgoingResId}'s ` +
+          `endDate — ${err.message}`);
+        result.skipped++;
+        result.errors.push({ resId: b.resId, room: b.room, error: err.message });
+        continue;
+      }
     }
 
     Logger.log(`attempting booking for ${b.resId} room ${b.room} guest ${b.guest}`);

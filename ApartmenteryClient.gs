@@ -352,8 +352,126 @@ function createApartmenteryBookingForRoom(roomRaw, opts) {
 }
 
 // -----------------------------------------------------------------------
-// Phase 2/3: Invoice + receipt (see below)
+// Same-day-turnover workaround: shrink an existing booking's endDate
 // -----------------------------------------------------------------------
+
+/**
+ * Reads the current values of every field the booking-edit form submits,
+ * so a targeted update (e.g. shortening endDate) can round-trip every
+ * other field unchanged instead of guessing/blanking them. Same "the
+ * browser always submits every field" reasoning as createApartmenteryBooking
+ * / createApartmenteryInvoice above — the edit form has the same kind of
+ * always-present fields, so read them back from the form's own
+ * server-rendered current values rather than re-deriving them.
+ */
+function _getApartmenteryBookingEditFormState_(branchId, unitId, bookingId) {
+  const path = `/user/branch/${branchId}/unit/${unitId}/booking/${bookingId}/edit`;
+  const response = _apartmenteryFetch_(path, { method: 'get' });
+  if (response.getResponseCode() !== 200) {
+    throw new Error(`Could not load edit form for booking ${bookingId} (HTTP ${response.getResponseCode()}).`);
+  }
+  const html = response.getContentText();
+
+  return {
+    startDate: _extractInputValue_(html, 'startDate'),
+    endDate: _extractInputValue_(html, 'endDate'),
+    note: _extractTextareaValue_(html, 'note'),
+    customerType: _extractCheckedRadioValue_(html, 'customerType') || 'existing',
+    customerId: _extractSelectedOptionValue_(html, 'customerId'),
+    customerName: _extractInputValue_(html, 'customerName'),
+    customerMobileNo: _extractInputValue_(html, 'customerMobileNo'),
+    customerIdNo: _extractInputValue_(html, 'customerIdNo'),
+    customerEmail: _extractInputValue_(html, 'customerEmail'),
+    customerNote: _extractTextareaValue_(html, 'customerNote'),
+    reminderChecked: _extractCheckboxChecked_(html, 'reminder'),
+    remindEvery: _extractInputValue_(html, 'remindEvery'),
+    reminderFrequency: _extractCheckedRadioValue_(html, 'reminderFrequency') || 'monthly',
+    remindOnDayInMonth: _extractSelectedOptionValue_(html, 'remindOnDayInMonth'),
+    remindOnDayInWeek: _extractSelectedOptionValue_(html, 'remindOnDayInWeek'),
+    remindOnDayInMonthInYear: _extractSelectedOptionValue_(html, 'remindOnDayInMonthInYear'),
+    remindOnMonthInYear: _extractSelectedOptionValue_(html, 'remindOnMonthInYear'),
+    remindInvoiceDayBefore: _extractSelectedOptionValue_(html, 'remindInvoiceDayBefore')
+  };
+}
+
+/**
+ * Changes a booking's endDate on apartmentery, leaving every other field
+ * (customer, note, reminder settings) exactly as it currently is — reads
+ * the live edit form first (see _getApartmenteryBookingEditFormState_)
+ * and resubmits its own values back, with only endDate swapped.
+ *
+ * Purpose: apartmentery refuses to create a new booking whose startDate
+ * equals another booking's endDate on the same unit — confirmed
+ * 2026-07-09 to be a hard rule on apartmentery's side (reproduced with a
+ * real browser submission too, not just this script), no way around it
+ * via a different payload. Nathan's existing manual fix is to shorten the
+ * outgoing booking's endDate by 1 day before creating the new one — this
+ * automates that step. See autoCreateApartmenteryBookings in
+ * ApartmenteryAutomation.gs for where it's called.
+ *
+ * @param {string} branchId
+ * @param {string} unitId
+ * @param {string} bookingId
+ * @param {string} newEndDate  YYYY-MM-DD
+ */
+function updateApartmenteryBookingEndDate(branchId, unitId, bookingId, newEndDate) {
+  const state = _getApartmenteryBookingEditFormState_(branchId, unitId, bookingId);
+
+  const path = `/user/branch/${branchId}/unit/${unitId}/booking/${bookingId}/edit`;
+  const payload = {
+    startDate: state.startDate,
+    endDate: newEndDate,
+    note: state.note,
+    customerType: state.customerType,
+    customerId: state.customerId,
+    customerName: state.customerName,
+    customerMobileNo: state.customerMobileNo,
+    customerIdNo: state.customerIdNo,
+    customerEmail: state.customerEmail,
+    customerNote: state.customerNote,
+    remindEvery: state.remindEvery,
+    reminderFrequency: state.reminderFrequency,
+    remindOnDayInMonth: state.remindOnDayInMonth,
+    remindOnDayInWeek: state.remindOnDayInWeek,
+    remindOnDayInMonthInYear: state.remindOnDayInMonthInYear,
+    remindOnMonthInYear: state.remindOnMonthInYear,
+    remindInvoiceDayBefore: state.remindInvoiceDayBefore
+  };
+  // reminder is a real <input type=checkbox> — only include it when it's
+  // actually checked, matching how a real browser omits unchecked checkboxes.
+  if (state.reminderChecked) payload.reminder = 'true';
+
+  const response = _apartmenteryFetch_(path, { method: 'post', payload: payload });
+
+  const code = response.getResponseCode();
+  if (code >= 300 && code < 400) {
+    return { ok: true, bookingId: bookingId, oldEndDate: state.endDate, newEndDate: newEndDate };
+  }
+
+  Logger.log('updateApartmenteryBookingEndDate FAILED — payload sent: ' + JSON.stringify(payload));
+  Logger.log('updateApartmenteryBookingEndDate FAILED — response code ' + code + ', extracted error: ' +
+    _extractPlayErrorMessage_(response.getContentText()));
+
+  throw new Error(
+    `Updating endDate for booking ${bookingId} to ${newEndDate} did not redirect as expected ` +
+    `(HTTP ${code}). Response may indicate a validation error — inspect manually.`
+  );
+}
+
+/**
+ * Convenience wrapper taking a Sheet1 room string instead of raw
+ * branchId/unitId, matching the *ForRoom naming pattern used elsewhere.
+ */
+function updateApartmenteryBookingEndDateForRoom(roomRaw, bookingId, newEndDate) {
+  const unit = getApartmenteryUnitForRoom(roomRaw);
+  if (!unit) {
+    return {
+      skipped: true,
+      reason: `Room "${roomRaw}" not found in ROOM_TO_UNIT_ID.`
+    };
+  }
+  return updateApartmenteryBookingEndDate(unit.branchId, unit.unitId, bookingId, newEndDate);
+}
 
 /**
  * Creates an invoice for a booking and returns its invoiceId.
@@ -504,6 +622,42 @@ function _extractInputValue_(html, fieldId) {
   const re = new RegExp(`id="${fieldId}"[^>]*value="([^"]*)"`);
   const match = html.match(re);
   return match ? match[1] : '';
+}
+
+/**
+ * Extracts the value="" of whichever <input type="radio" name="X" ...
+ * checked> is currently checked in a radio group. Returns '' if none
+ * checked (shouldn't happen for apartmentery's forms — every radio group
+ * used here always has a default-checked option).
+ */
+function _extractCheckedRadioValue_(html, name) {
+  const re = new RegExp(`<input[^>]*name="${name}"[^>]*value="([^"]*)"[^>]*checked`, 'g');
+  let m;
+  let last = '';
+  while ((m = re.exec(html)) !== null) last = m[1];
+  return last;
+}
+
+/**
+ * Extracts the value="" of the <option ... selected> inside <select id="X">.
+ */
+function _extractSelectedOptionValue_(html, selectId) {
+  const selectRe = new RegExp(`<select[^>]*id="${selectId}"[\\s\\S]*?</select>`);
+  const selectMatch = html.match(selectRe);
+  if (!selectMatch) return '';
+  const optMatch = selectMatch[0].match(/<option\s+value="([^"]*)"[^>]*selected/);
+  return optMatch ? optMatch[1] : '';
+}
+
+/** True if <input type="checkbox" id="X" ... checked> is present and checked. */
+function _extractCheckboxChecked_(html, fieldId) {
+  return new RegExp(`id="${fieldId}"[^>]*checked`).test(html);
+}
+
+/** Extracts the text content of <textarea id="X" name="X">...</textarea>. */
+function _extractTextareaValue_(html, fieldId) {
+  const m = html.match(new RegExp(`id="${fieldId}"[^>]*>([\\s\\S]*?)</textarea>`));
+  return m ? m[1].trim() : '';
 }
 
 /**
