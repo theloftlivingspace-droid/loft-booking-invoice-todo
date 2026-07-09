@@ -113,6 +113,32 @@ function _extractPlayErrorMessage_(html) {
 }
 
 /**
+ * The unit's booking-listing page embeds all its bookings as a fullCalendar
+ * events array in inline JS, e.g.:
+ *   { title: 'Guest Name / Airbnb', start: '...', end: '...',
+ *     url: '/user/branch/6801/unit/163865/booking/326192' }
+ * This is the only place a newly-created booking's ID shows up when the
+ * create-booking redirect just points back to this listing page instead of
+ * the booking itself. Finds the entry whose title contains guestName and
+ * returns its numeric booking ID, or null if none matches.
+ */
+function _findBookingIdByGuestName_(html, guestName) {
+  html = String(html || '');
+  const blockRe = /\{\s*title:\s*'((?:[^'\\]|\\.)*)'[\s\S]*?url:\s*'([^']*)'\s*\}/g;
+  let m;
+  let lastMatchId = null;
+  while ((m = blockRe.exec(html)) !== null) {
+    const title = m[1];
+    const url = m[2];
+    if (title.indexOf(guestName) !== -1) {
+      const idMatch = url.match(/\/booking\/(\d+)/);
+      if (idMatch) lastMatchId = idMatch[1]; // keep the last (most recent) match
+    }
+  }
+  return lastMatchId;
+}
+
+/**
  * Checks whether a response indicates we got bounced to the login page
  * (session expired / invalid) rather than the page we actually asked for.
  */
@@ -270,6 +296,23 @@ function createApartmenteryBooking(branchId, unitId, opts) {
     if (match) {
       return { bookingId: match[1], location: location };
     }
+
+    // Confirmed 2026-07-09: a successful booking creation redirects to the
+    // unit's plain booking-listing page (e.g. ".../unit/163865/booking"),
+    // not to the new booking's own URL — there's no ID in the Location
+    // header at all. GET that listing page and pull the ID out of its
+    // embedded fullCalendar events array by matching on guest name instead.
+    if (/\/booking\/?$/.test(location)) {
+      const listingResponse = _apartmenteryFetch_(location, { method: 'get' });
+      const bookingId = _findBookingIdByGuestName_(listingResponse.getContentText(), opts.guestName);
+      if (bookingId) {
+        return { bookingId: bookingId, location: location };
+      }
+      Logger.log(`createApartmenteryBooking: redirected to listing page (${location}) but ` +
+        `couldn't find a booking for guest "${opts.guestName}" in its calendar events — ` +
+        `it may have been created under a slightly different title. Check apartmentery manually.`);
+    }
+
     Logger.log(`createApartmenteryBooking: got redirect (HTTP ${code}) but Location header ` +
       `didn't match expected pattern. Raw Location: "${location}"`);
   }
