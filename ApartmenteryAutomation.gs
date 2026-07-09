@@ -126,11 +126,35 @@ function autoCreateApartmenteryBookings() {
 
   const result = { created: 0, skipped: 0, sessionExpired: false, errors: [] };
 
+  // apartmentery refuses to create a booking whose startDate equals another
+  // booking's checkout date on the same room (same-day turnover) — confirmed
+  // 2026-07-09, this is the cause of the generic HTTP 500 "Oops, an error
+  // occurred" page apartmentery returns for these, with no detail in the
+  // response to detect it from. Build a per-room set of checkout dates up
+  // front so we can skip these cleanly instead of hitting that wall (and
+  // re-logging the same unhelpful error) on every run.
+  const checkoutsByRoom = {};
+  items.forEach(x => {
+    if (/ยกเลิก|cancel/i.test(x.room)) return; // cancelled stays don't occupy the room
+    if (!x.checkout) return;
+    const rn = roomNum_(x.room);
+    if (!checkoutsByRoom[rn]) checkoutsByRoom[rn] = new Set();
+    checkoutsByRoom[rn].add(x.checkout);
+  });
+
   for (const b of items) {
     if (b.done) { Logger.log(`skip ${b.resId} (${b.room}): already marked done`); continue; }
     // Cancelled bookings ("204 Elegance ยกเลิก") never need an apartmentery booking.
     if (/ยกเลิก|cancel/i.test(b.room)) { Logger.log(`skip ${b.resId} (${b.room}): cancelled`); continue; }
     if (getApartmenteryBookingId_(b.resId)) { Logger.log(`skip ${b.resId} (${b.room}): already has apartmentery bookingId`); continue; }
+
+    const roomCheckouts = checkoutsByRoom[roomNum_(b.room)];
+    if (roomCheckouts && roomCheckouts.has(b.checkin)) {
+      Logger.log(`skip ${b.resId} (${b.room}): same-day turnover — another guest checks out ${b.checkin} ` +
+        `(apartmentery blocks this; create manually once the outgoing guest is checked out)`);
+      result.skipped++;
+      continue;
+    }
 
     Logger.log(`attempting booking for ${b.resId} room ${b.room} guest ${b.guest}`);
 
