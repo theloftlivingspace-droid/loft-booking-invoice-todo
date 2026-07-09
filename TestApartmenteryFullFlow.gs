@@ -27,8 +27,8 @@ function runTestApartmenteryFullFlow() {
 
 function testApartmenteryFullFlow_() {
   const room = '205';
-  const startDate = '2026-09-10';
-  const endDate = '2026-09-12';
+  const startDate = '2026-09-20';
+  const endDate = '2026-09-22';
   // Root cause of the earlier 500s found and fixed in createApartmenteryBooking
   // (missing reminder-child fields) — back to a clearly-marked test name now.
   const testGuestName = 'TEST DELETE ME - Claude Test';
