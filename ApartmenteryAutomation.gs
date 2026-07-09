@@ -1,0 +1,251 @@
+/**
+ * ApartmenteryAutomation.gs
+ * -----------------------------------------------------------------------
+ * Fully-automated bridge between loft-booking-invoice-todo's existing
+ * "things that still need doing" lists (getBookingToAdd_, getInvoiceToCreate_)
+ * and apartmentery.com (via ApartmenteryClient.gs — must be added to this
+ * same Apps Script project for these functions to work).
+ *
+ * WHAT THIS RUNS AUTOMATICALLY (no per-item approval):
+ *   1. autoCreateApartmenteryBookings()
+ *      For every booking in getBookingToAdd_() not yet marked done, and
+ *      whose room resolves via ROOM_TO_UNIT_ID: creates the booking on
+ *      apartmentery, stores the returned apartmentery bookingId back into
+ *      Sheet1 (new "Apartmentery Booking ID" column), and calls
+ *      setBookingDone(resId, true).
+ *
+ *   2. autoCreateApartmenteryInvoicesAndReceipts()
+ *      For every payout in getInvoiceToCreate_() not yet marked done: looks
+ *      up the matching Sheet1 row via the SAME matchKeys_ fuzzy-join already
+ *      used elsewhere in this project, reads that row's apartmentery
+ *      bookingId, then creates the invoice + receipt (net amount = the
+ *      matched payout amount, paymentMethod=transfer), and calls
+ *      setInvoiceDone(invoiceKey, true).
+ *
+ * WHAT IT SKIPS (leaves undone, does NOT mark done, does NOT alert per item):
+ *   - Rooms not in ROOM_TO_UNIT_ID (e.g. a new room added after this file
+ *     was last updated) — add the room to ApartmenteryClient.gs's
+ *     ROOM_TO_UNIT_ID map, then it'll pick up next run.
+ *   - Invoice items whose matching Sheet1 booking has no apartmentery
+ *     bookingId yet (booking automation hasn't caught up, or is itself
+ *     skipped for the reason above).
+ *   - Invoice items where room resolution itself failed upstream
+ *     (getInvoiceToCreate_ already flags these as "⚠️ ไม่ทราบห้อง (...)").
+ *
+ * WHAT STOPS THE WHOLE RUN IMMEDIATELY:
+ *   - Apartmentery session expiry (SESSION_EXPIRED from ApartmenteryClient).
+ *     One LINE alert is sent (not one per remaining item) and the run
+ *     exits — every other item stays undone until the session cookie is
+ *     refreshed, at which point the next run picks up exactly where it
+ *     left off (nothing here is order-dependent).
+ *
+ * SETUP:
+ *   1. Add ApartmenteryClient.gs to this same Apps Script project.
+ *   2. Set APARTMENTERY_SESSION in Script Properties (see that file's header).
+ *   3. Run addApartmenteryBookingIdColumnIfMissing_() once manually to add
+ *      the tracking column to Sheet1 (idempotent — safe to run more than once).
+ *   4. Wire runApartmenteryAutomation() to a time trigger, e.g. hourly:
+ *      Apps Script editor ▶ Triggers ▶ Add Trigger ▶ runApartmenteryAutomation
+ *      ▶ Time-driven ▶ Hour timer ▶ Every hour.
+ * -----------------------------------------------------------------------
+ */
+
+const APARTMENTERY_BOOKING_ID_COL_HEADER = 'Apartmentery Booking ID';
+
+/**
+ * Adds the "Apartmentery Booking ID" column to Sheet1 if it isn't there
+ * yet. Idempotent — safe to call on every run (cheap no-op if present).
+ */
+function addApartmenteryBookingIdColumnIfMissing_() {
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
+  if (!src) throw new Error('ไม่พบชีต: ' + SRC_BOOKING_SHEET);
+  const header = src.getRange(1, 1, 1, src.getLastColumn()).getValues()[0];
+  if (header.indexOf(APARTMENTERY_BOOKING_ID_COL_HEADER) >= 0) return; // already present
+  const nextCol = src.getLastColumn() + 1;
+  src.getRange(1, nextCol).setValue(APARTMENTERY_BOOKING_ID_COL_HEADER);
+}
+
+/** Reads the apartmentery bookingId already stored for a given Sheet1 ResId, or '' if none. */
+function getApartmenteryBookingId_(resId) {
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
+  if (!src) return '';
+  const data = src.getDataRange().getValues();
+  const header = data[0];
+  const idx = indexMap_(header, ['ResId', APARTMENTERY_BOOKING_ID_COL_HEADER]);
+  if (idx.ResId < 0 || idx[APARTMENTERY_BOOKING_ID_COL_HEADER] < 0) return '';
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idx.ResId] || '').trim() === resId) {
+      return String(data[i][idx[APARTMENTERY_BOOKING_ID_COL_HEADER]] || '').trim();
+    }
+  }
+  return '';
+}
+
+/** Writes the apartmentery bookingId for a given Sheet1 ResId. */
+function setApartmenteryBookingId_(resId, apartmenteryBookingId) {
+  addApartmenteryBookingIdColumnIfMissing_();
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
+  const data = src.getDataRange().getValues();
+  const header = data[0];
+  const idx = indexMap_(header, ['ResId', APARTMENTERY_BOOKING_ID_COL_HEADER]);
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idx.ResId] || '').trim() === resId) {
+      src.getRange(i + 1, idx[APARTMENTERY_BOOKING_ID_COL_HEADER] + 1).setValue(apartmenteryBookingId);
+      return { ok: true };
+    }
+  }
+  return { ok: false, error: 'resId not found: ' + resId };
+}
+
+/**
+ * Phase 1 automation: create any missing apartmentery bookings.
+ * Returns a summary object for logging — call this from
+ * runApartmenteryAutomation() rather than a trigger directly, so both
+ * phases share one run and one session-expiry stop.
+ */
+function autoCreateApartmenteryBookings() {
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const todayStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
+  const items = getBookingToAdd_(ss, todayStr);
+
+  const result = { created: 0, skipped: 0, sessionExpired: false, errors: [] };
+
+  for (const b of items) {
+    if (b.done) continue;
+    // Cancelled bookings ("204 Elegance ยกเลิก") never need an apartmentery booking.
+    if (/ยกเลิก|cancel/i.test(b.room)) continue;
+    if (getApartmenteryBookingId_(b.resId)) continue; // already linked, just not marked done yet — skip re-creating
+
+    try {
+      const created = createApartmenteryBookingForRoom(b.room, {
+        startDate: b.checkin,
+        endDate: b.checkout || '',
+        guestName: b.guest,
+        note: `${b.channel} ${b.resId}`.trim()
+      });
+
+      if (created && created.skipped) {
+        result.skipped++;
+        continue;
+      }
+
+      setApartmenteryBookingId_(b.resId, created.bookingId);
+      setBookingDone(b.resId, true);
+      result.created++;
+
+    } catch (err) {
+      if (isApartmenterySessionExpiredError(err)) {
+        result.sessionExpired = true;
+        break; // stop the whole run — see file header
+      }
+      result.errors.push({ resId: b.resId, guest: b.guest, room: b.room, error: err.message });
+      // Non-session errors (e.g. one bad row) don't stop the batch —
+      // continue so one problem booking doesn't block everything else.
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Phase 2/3 automation: create any missing invoices + receipts for
+ * matched payouts. Joins invoice items back to their Sheet1 booking row
+ * (and therefore its apartmentery bookingId) using the same matchKeys_
+ * fuzzy-match already used elsewhere in this project.
+ */
+function autoCreateApartmenteryInvoicesAndReceipts() {
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const todayStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
+
+  const bookingItems = getBookingToAdd_(ss, todayStr);
+  const invoiceItems = getInvoiceToCreate_(ss, todayStr);
+
+  // Build matchKey -> resId index from booking items (only ones that
+  // actually have an apartmentery bookingId already — no point matching
+  // to a booking apartmentery doesn't know about yet).
+  const keyToResId = {};
+  bookingItems.forEach(b => {
+    const aptId = getApartmenteryBookingId_(b.resId);
+    if (!aptId) return;
+    (b.matchKeys || []).forEach(k => { if (!keyToResId[k]) keyToResId[k] = b.resId; });
+  });
+
+  const result = { created: 0, skipped: 0, sessionExpired: false, errors: [] };
+
+  for (const inv of invoiceItems) {
+    if (inv.done) continue;
+    if (String(inv.room).indexOf('ไม่ทราบห้อง') >= 0) { result.skipped++; continue; } // unresolved room, needs manual review
+
+    let resId = null;
+    for (const k of (inv.matchKeys || [])) {
+      if (keyToResId[k]) { resId = keyToResId[k]; break; }
+    }
+    if (!resId) { result.skipped++; continue; } // no linked apartmentery booking yet
+
+    const aptBookingId = getApartmenteryBookingId_(resId);
+    if (!aptBookingId) { result.skipped++; continue; }
+
+    try {
+      const outcome = processPayoutToReceiptForRoom(inv.room, aptBookingId, inv.net, todayStr);
+      if (outcome && outcome.skipped) {
+        result.skipped++;
+        continue;
+      }
+      setInvoiceDone(inv.invoiceKey, true);
+      result.created++;
+
+    } catch (err) {
+      if (isApartmenterySessionExpiredError(err)) {
+        result.sessionExpired = true;
+        break;
+      }
+      result.errors.push({ invoiceKey: inv.invoiceKey, guest: inv.guest, room: inv.room, error: err.message });
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Single entry point — run this from a time-driven trigger.
+ * Runs booking creation first (so same-run invoices can find a freshly
+ * created apartmentery bookingId), then invoice+receipt creation.
+ * Logs a summary; only sends a LINE alert if something needs human
+ * attention (errors, or session expiry — which ApartmenteryClient already
+ * alerts on directly, so it isn't duplicated here).
+ */
+function runApartmenteryAutomation() {
+  const bookingResult = autoCreateApartmenteryBookings();
+  // Session already expired during phase 1 — no point attempting phase 2.
+  const invoiceResult = bookingResult.sessionExpired
+    ? { created: 0, skipped: 0, sessionExpired: true, errors: [] }
+    : autoCreateApartmenteryInvoicesAndReceipts();
+
+  Logger.log('Apartmentery automation run: ' + JSON.stringify({ bookingResult, invoiceResult }));
+
+  const allErrors = [...bookingResult.errors, ...invoiceResult.errors];
+  if (allErrors.length > 0) {
+    try {
+      const props = PropertiesService.getScriptProperties();
+      const botUrl = props.getProperty('BOT_URL') || 'https://hotel-line-bot.onrender.com';
+      const adminToken = props.getProperty('ADMIN_TOKEN') || 'apt2025@secret';
+      const summary = allErrors
+        .map(e => `- ${e.guest || ''} ${e.room || e.resId || e.invoiceKey}: ${e.error}`)
+        .join('\n');
+      UrlFetchApp.fetch(botUrl + '/api/send-maid-note', {
+        method: 'post',
+        contentType: 'application/json',
+        payload: JSON.stringify({ note: `⚠️ Apartmentery automation มีรายการที่ error ${allErrors.length} รายการ:\n${summary}` }),
+        headers: { 'x-admin-token': adminToken },
+        muteHttpExceptions: true
+      });
+    } catch (e) {
+      Logger.log('Failed to send error summary LINE alert: ' + e.message);
+    }
+  }
+
+  return { bookingResult, invoiceResult };
+}
