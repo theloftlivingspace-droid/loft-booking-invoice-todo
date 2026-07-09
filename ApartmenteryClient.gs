@@ -217,6 +217,21 @@ function createApartmenteryBooking(branchId, unitId, opts) {
   }
 
   const path = `/user/branch/${branchId}/unit/${unitId}/booking`;
+
+  // The `reminder` checkbox's sibling fields (remindEvery, reminderFrequency,
+  // remindOnDayInMonth, etc.) are never removed from the booking form's DOM —
+  // they're only hidden with CSS when the checkbox is unticked — so a real
+  // browser submits them on every booking regardless of the checkbox state.
+  // Confirmed 2026-07-09: omitting them entirely (as this function did
+  // before) causes apartmentery's server to 500 on every booking. Sending
+  // them with the form's own defaults, while still leaving `reminder` itself
+  // unset, reproduces an "unticked checkbox" submission exactly — apartmentery's
+  // own reminder/auto-invoice system stays off, matching the original intent
+  // described below, but the request no longer 500s.
+  const startDateObj = new Date(opts.startDate + 'T00:00:00Z');
+  const dayOfMonth = String(startDateObj.getUTCDate());
+  const monthOfYear = String(startDateObj.getUTCMonth() + 1);
+
   const payload = {
     startDate: opts.startDate,
     endDate: opts.endDate || '',
@@ -226,8 +241,15 @@ function createApartmenteryBooking(branchId, unitId, opts) {
     'customerMobileNo': opts.guestMobile || '',
     'customerIdNo': '',
     'customerEmail': opts.guestEmail || '',
-    'customerNote': opts.customerNote || ''
-    // reminder intentionally omitted — see function comment above
+    'customerNote': opts.customerNote || '',
+    // reminder itself intentionally omitted — see function comment above
+    remindEvery: '1',
+    reminderFrequency: 'monthly',
+    remindOnDayInMonth: dayOfMonth,
+    remindOnDayInWeek: '1',
+    remindOnDayInMonthInYear: dayOfMonth,
+    remindOnMonthInYear: monthOfYear,
+    remindInvoiceDayBefore: '5'
   };
 
   const response = _apartmenteryFetch_(path, { method: 'post', payload: payload });

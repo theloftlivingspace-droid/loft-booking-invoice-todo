@@ -27,13 +27,11 @@ function runTestApartmenteryFullFlow() {
 
 function testApartmenteryFullFlow_() {
   const room = '205';
-  const startDate = '2026-09-01';
-  const endDate = '2026-09-03';
-  // Plain name, no dash — matches what was confirmed to work when created
-  // manually in the apartmentery web UI with the same room/dates. The
-  // previous attempt used "TEST DELETE ME - Claude Test" (with a dash) and
-  // got HTTP 500; this run isolates whether the dash was the actual cause.
-  const testGuestName = 'Test Guest';
+  const startDate = '2026-09-10';
+  const endDate = '2026-09-12';
+  // Root cause of the earlier 500s found and fixed in createApartmenteryBooking
+  // (missing reminder-child fields) — back to a clearly-marked test name now.
+  const testGuestName = 'TEST DELETE ME - Claude Test';
   const testRentalPrice = 1000;
 
   Logger.log(`[TEST] Step 1: creating booking for room ${room}, ${startDate} to ${endDate}`);
@@ -42,7 +40,7 @@ function testApartmenteryFullFlow_() {
     startDate: startDate,
     endDate: endDate,
     guestName: testGuestName,
-    note: ''
+    note: 'TEST DELETE ME - automated flow test'
   });
 
   if (bookingResult && bookingResult.skipped) {
