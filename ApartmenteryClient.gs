@@ -377,13 +377,25 @@ function createApartmenteryInvoice(branchId, unitId, bookingId, rentalPrice, dat
   // every invoice. Sending the form's own defaults for all of them keeps
   // the original intent (no electric/water charge, no extra line items,
   // no withholding, no PromptPay) but reproduces a real form submission.
+  //
+  // Two fields are NOT empty-string defaults, confirmed from the form's
+  // rendered HTML (view-source, 2026-07-09):
+  //   - electPricePerUnit has value="10.0" hardcoded in the <input>.
+  //   - withholdingPercent.value is a <select> with no `selected` option,
+  //     so a real browser submits the first <option> ("3") by default.
+  // Sending "" for withholdingPercent.value instead of "3" is the likely
+  // cause of the follow-up 500 after the first field-completeness fix —
+  // the server probably fails to parse "" as the expected numeric enum.
+  // addVat / withholdingPercent.apply / promptPayId.apply are real
+  // <input type=checkbox> elements, unchecked by default, so real
+  // browsers omit them entirely from the submit — correctly not sent here.
   const payload = {
     dateToPay: dateToPay,
     rentalPrice: String(rentalPrice),
     electType: 'no',
     electFromStr: '',
     electToStr: '',
-    electPricePerUnit: '',
+    electPricePerUnit: '10.0',
     waterType: 'no',
     waterFromStr: '',
     waterToStr: '',
@@ -395,7 +407,7 @@ function createApartmenteryInvoice(branchId, unitId, bookingId, rentalPrice, dat
     'other5.desc': '', 'other5.price': '',
     'other6.desc': '', 'other6.price': '',
     'other7.desc': '', 'other7.price': '',
-    'withholdingPercent.value': '',
+    'withholdingPercent.value': '3',
     'promptPayId.value': '',
     'invoiceNote.type': 'default',
     'invoiceNote.value': ''
