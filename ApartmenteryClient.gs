@@ -88,10 +88,19 @@ function _getStoredSessionCookie_() {
  */
 function _extractPlayErrorMessage_(html) {
   html = String(html || '');
-  const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-  const h2Match = html.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
   const strip = s => s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
+  // A real validation rejection (HTTP 400) re-renders the normal page with
+  // a Bootstrap alert box for the actual message — h1/h2 on that page is
+  // just the ordinary page title, not useful. Check alert boxes first.
+  const alertMatches = [...html.matchAll(/<div[^>]*class="[^"]*alert[^"]*"[^>]*>([\s\S]*?)<\/div>/gi)];
+  const alertText = alertMatches.map(m => strip(m[1])).filter(Boolean).join(' | ');
+  if (alertText) return alertText;
+
+  // Otherwise this is likely Play's generic crash page (HTTP 500) — h1/h2
+  // there hold the actual exception title/message.
+  const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  const h2Match = html.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
   if (h1Match || h2Match) {
     const title = h1Match ? strip(h1Match[1]) : '';
     const detail = h2Match ? strip(h2Match[1]) : '';
@@ -100,7 +109,7 @@ function _extractPlayErrorMessage_(html) {
 
   // Structure didn't match what we expected — fall back to a bigger raw
   // slice so there's still something to look at.
-  return 'no h1/h2 found; raw (first 3000 chars): ' + html.slice(0, 3000);
+  return 'no alert/h1/h2 found; raw (first 3000 chars): ' + html.slice(0, 3000);
 }
 
 /**
