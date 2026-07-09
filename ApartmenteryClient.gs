@@ -217,6 +217,12 @@ function createApartmenteryBooking(branchId, unitId, opts) {
     }
   }
 
+  // Diagnostic logging — payload sent + start of response body, so a
+  // non-redirect response can actually be debugged instead of guessed at.
+  Logger.log('createApartmenteryBooking FAILED — payload sent: ' + JSON.stringify(payload));
+  Logger.log('createApartmenteryBooking FAILED — response code ' + code + ', body (first 1500 chars): ' +
+    String(response.getContentText()).slice(0, 1500));
+
   throw new Error(
     `Booking creation for unit ${unitId} (guest ${opts.guestName}) did not redirect ` +
     `as expected (HTTP ${code}). Response may indicate a validation error — inspect manually.`
