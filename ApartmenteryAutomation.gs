@@ -50,6 +50,16 @@
  * -----------------------------------------------------------------------
  */
 
+/**
+ * Wrapper — addApartmenteryBookingIdColumnIfMissing_() ends in "_" so Apps
+ * Script hides it from the "select function to run" dropdown. Call this
+ * instead when running manually from the editor.
+ */
+function runAddApartmenteryBookingIdColumn() {
+  addApartmenteryBookingIdColumnIfMissing_();
+  Logger.log('Done — column "' + APARTMENTERY_BOOKING_ID_COL_HEADER + '" is present on Sheet1.');
+}
+
 const APARTMENTERY_BOOKING_ID_COL_HEADER = 'Apartmentery Booking ID';
 
 /**
