@@ -111,13 +111,18 @@ function autoCreateApartmenteryBookings() {
   const todayStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
   const items = getBookingToAdd_(ss, todayStr);
 
+  Logger.log(`autoCreateApartmenteryBookings: ${items.length} total rows from getBookingToAdd_ — ` +
+    JSON.stringify(items.map(b => ({ resId: b.resId, room: b.room, guest: b.guest, done: b.done }))));
+
   const result = { created: 0, skipped: 0, sessionExpired: false, errors: [] };
 
   for (const b of items) {
-    if (b.done) continue;
+    if (b.done) { Logger.log(`skip ${b.resId} (${b.room}): already marked done`); continue; }
     // Cancelled bookings ("204 Elegance ยกเลิก") never need an apartmentery booking.
-    if (/ยกเลิก|cancel/i.test(b.room)) continue;
-    if (getApartmenteryBookingId_(b.resId)) continue; // already linked, just not marked done yet — skip re-creating
+    if (/ยกเลิก|cancel/i.test(b.room)) { Logger.log(`skip ${b.resId} (${b.room}): cancelled`); continue; }
+    if (getApartmenteryBookingId_(b.resId)) { Logger.log(`skip ${b.resId} (${b.room}): already has apartmentery bookingId`); continue; }
+
+    Logger.log(`attempting booking for ${b.resId} room ${b.room} guest ${b.guest}`);
 
     try {
       const created = createApartmenteryBookingForRoom(b.room, {
@@ -128,25 +133,30 @@ function autoCreateApartmenteryBookings() {
       });
 
       if (created && created.skipped) {
+        Logger.log(`skip ${b.resId} (${b.room}): ${created.reason}`);
         result.skipped++;
         continue;
       }
 
       setApartmenteryBookingId_(b.resId, created.bookingId);
       setBookingDone(b.resId, true);
+      Logger.log(`created ${b.resId} (${b.room}) -> apartmentery bookingId ${created.bookingId}`);
       result.created++;
 
     } catch (err) {
       if (isApartmenterySessionExpiredError(err)) {
+        Logger.log(`SESSION EXPIRED while creating booking for ${b.resId} (${b.room}): ${err.message}`);
         result.sessionExpired = true;
         break; // stop the whole run — see file header
       }
+      Logger.log(`ERROR creating booking for ${b.resId} (${b.room}): ${err.message}`);
       result.errors.push({ resId: b.resId, guest: b.guest, room: b.room, error: err.message });
       // Non-session errors (e.g. one bad row) don't stop the batch —
       // continue so one problem booking doesn't block everything else.
     }
   }
 
+  Logger.log('autoCreateApartmenteryBookings result: ' + JSON.stringify(result));
   return result;
 }
 
