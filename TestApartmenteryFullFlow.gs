@@ -29,9 +29,12 @@ function testApartmenteryFullFlow_() {
   const room = '205';
   const startDate = '2026-09-20';
   const endDate = '2026-09-22';
-  // Root cause of the earlier 500s found and fixed in createApartmenteryBooking
-  // (missing reminder-child fields) — back to a clearly-marked test name now.
-  const testGuestName = 'TEST DELETE ME - Claude Test';
+  // apartmentery flags a "new" customer as a duplicate of an existing one
+  // when the name matches and both idNo/mobile are blank (confirmed
+  // 2026-07-09 — this is what killed the previous test run, name collided
+  // with the Sep 10-12 test booking's customer record). Appending a
+  // timestamp keeps every test run's customer name unique.
+  const testGuestName = 'TEST DELETE ME - Claude Test ' + new Date().getTime();
   const testRentalPrice = 1000;
 
   Logger.log(`[TEST] Step 1: creating booking for room ${room}, ${startDate} to ${endDate}`);
