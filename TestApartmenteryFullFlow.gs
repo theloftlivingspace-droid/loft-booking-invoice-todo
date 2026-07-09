@@ -15,6 +15,16 @@
  * date range blind, just to avoid the same-day-turnover dates already
  * known to be occupied around today's date).
  */
+/**
+ * Public wrapper — Apps Script hides any function whose name ends with
+ * "_" from the "select function to run" dropdown, which is why
+ * testApartmenteryFullFlow_ itself doesn't show up there. Run this one
+ * instead; it just calls straight through.
+ */
+function runTestApartmenteryFullFlow() {
+  return testApartmenteryFullFlow_();
+}
+
 function testApartmenteryFullFlow_() {
   const room = '205';
   const startDate = '2026-09-01';
