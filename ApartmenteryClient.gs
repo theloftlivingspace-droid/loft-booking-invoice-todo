@@ -387,7 +387,13 @@ function createApartmenteryInvoice(branchId, unitId, bookingId, rentalPrice, dat
     if (match) {
       return { invoiceId: match[1], location: location };
     }
+    Logger.log(`createApartmenteryInvoice: got redirect (HTTP ${code}) but Location header ` +
+      `didn't match expected pattern. Raw Location: "${location}"`);
   }
+
+  Logger.log('createApartmenteryInvoice FAILED — payload sent: ' + JSON.stringify(payload));
+  Logger.log('createApartmenteryInvoice FAILED — response code ' + code + ', extracted error: ' +
+    _extractPlayErrorMessage_(response.getContentText()));
 
   throw new Error(
     `Invoice creation for booking ${bookingId} did not redirect as expected ` +
@@ -445,6 +451,10 @@ function createApartmenteryReceipt(branchId, unitId, bookingId, invoiceId, paidD
     const match = location.match(/\/receipt\/(\d+)/);
     return { receiptCreated: true, location: location, receiptId: match ? match[1] : null };
   }
+
+  Logger.log('createApartmenteryReceipt FAILED — payload sent: ' + JSON.stringify(payload));
+  Logger.log('createApartmenteryReceipt FAILED — response code ' + code + ', extracted error: ' +
+    _extractPlayErrorMessage_(response.getContentText()));
 
   throw new Error(
     `Receipt creation for invoice ${invoiceId} did not redirect as expected ` +

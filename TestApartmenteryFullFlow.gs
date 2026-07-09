@@ -25,6 +25,33 @@ function runTestApartmenteryFullFlow() {
   return testApartmenteryFullFlow_();
 }
 
+/**
+ * Retries just the invoice+receipt step against the booking already created
+ * in a previous run (bookingId 326198, room 205, 2026-09-25 to 2026-09-27) —
+ * avoids creating a new test booking every time invoice/receipt logic needs
+ * another attempt.
+ */
+function runTestInvoiceReceiptOnly() {
+  const room = '205';
+  const bookingId = '326198';
+  const startDate = '2026-09-25';
+  const testRentalPrice = 1000;
+
+  Logger.log(`[TEST] Retrying invoice+receipt only for existing bookingId=${bookingId}`);
+
+  const receiptResult = processPayoutToReceiptForRoom(room, bookingId, testRentalPrice, startDate);
+
+  if (receiptResult && receiptResult.skipped) {
+    Logger.log(`[TEST] Invoice/receipt step skipped: ${receiptResult.reason}`);
+    return { step: 'invoice_receipt', skipped: true, reason: receiptResult.reason, bookingId: bookingId };
+  }
+
+  Logger.log(`[TEST] Invoice + receipt created: invoiceId=${receiptResult.invoiceId}, ` +
+    `receiptId=${receiptResult.receiptId}, receiptLocation=${receiptResult.receiptLocation}`);
+
+  return { bookingId: bookingId, invoiceId: receiptResult.invoiceId, receiptId: receiptResult.receiptId };
+}
+
 function testApartmenteryFullFlow_() {
   const room = '205';
   const startDate = '2026-09-25';
