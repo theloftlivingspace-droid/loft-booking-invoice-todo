@@ -80,6 +80,30 @@ function _getStoredSessionCookie_() {
 }
 
 /**
+ * Pulls the actual exception title/message out of a Play framework error
+ * page. Play's default error page buries this well past the <head>/CSS,
+ * inside <h1>/<h2> tags — logging the first ~1500 chars of raw HTML just
+ * gets you boilerplate styling, not the useful part. Falls back to a
+ * larger raw slice if the expected structure isn't found.
+ */
+function _extractPlayErrorMessage_(html) {
+  html = String(html || '');
+  const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  const h2Match = html.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
+  const strip = s => s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+  if (h1Match || h2Match) {
+    const title = h1Match ? strip(h1Match[1]) : '';
+    const detail = h2Match ? strip(h2Match[1]) : '';
+    return [title, detail].filter(Boolean).join(' — ');
+  }
+
+  // Structure didn't match what we expected — fall back to a bigger raw
+  // slice so there's still something to look at.
+  return 'no h1/h2 found; raw (first 3000 chars): ' + html.slice(0, 3000);
+}
+
+/**
  * Checks whether a response indicates we got bounced to the login page
  * (session expired / invalid) rather than the page we actually asked for.
  */
@@ -217,11 +241,12 @@ function createApartmenteryBooking(branchId, unitId, opts) {
     }
   }
 
-  // Diagnostic logging — payload sent + start of response body, so a
+  // Diagnostic logging — payload sent + the actual error message from
+  // Play's error page (title/CSS alone told us nothing useful), so a
   // non-redirect response can actually be debugged instead of guessed at.
   Logger.log('createApartmenteryBooking FAILED — payload sent: ' + JSON.stringify(payload));
-  Logger.log('createApartmenteryBooking FAILED — response code ' + code + ', body (first 1500 chars): ' +
-    String(response.getContentText()).slice(0, 1500));
+  Logger.log('createApartmenteryBooking FAILED — response code ' + code + ', extracted error: ' +
+    _extractPlayErrorMessage_(response.getContentText()));
 
   throw new Error(
     `Booking creation for unit ${unitId} (guest ${opts.guestName}) did not redirect ` +
