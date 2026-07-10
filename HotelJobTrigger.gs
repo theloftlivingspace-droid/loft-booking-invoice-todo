@@ -69,11 +69,13 @@ function triggerHotelJob19() {
       return;
     }
     Logger.log('[triggerHotelJob19] Render cron has NOT run today yet (lastRun=' + statusBody.lastRun + ') — firing backstop.');
+    _alertRenderMissed_('Render ยังไม่ส่งสรุปแม่บ้าน 19:00 วันนี้ (lastRun=' + (statusBody.lastRun || 'ไม่มีข้อมูล') + ') กำลังยิง backstop แทน — เข้าไปเช็ค Render logs ด้วยว่าทำไม cron ไม่ทำงาน');
   } catch (e) {
     // Status check itself failed (e.g. instance asleep, Redis down) —
     // treat as "didn't run" and fire the backstop anyway, better safe
     // than silently missing the summary again.
     Logger.log('[triggerHotelJob19] Status check failed (' + e.message + ') — assuming it did not run, firing backstop anyway.');
+    _alertRenderMissed_('เช็ค /api/hotel-job-status ไม่ได้ (' + e.message + ') สันนิษฐานว่า Render ยังไม่ส่ง กำลังยิง backstop แทน — เข้าไปเช็ค Render ว่า instance ตายหรือหลับอยู่หรือเปล่า');
   }
 
   // Step 2: fire the job ourselves.
@@ -98,6 +100,30 @@ function triggerHotelJob19() {
   } catch (e) {
     Logger.log('[triggerHotelJob19] EXCEPTION: ' + e.message);
     _alertHotelJobFailure_('เรียก /api/test-hotel-job ไม่สำเร็จ: ' + e.message);
+  }
+}
+
+/**
+ * Sends a 1:1 LINE alert to ADMIN_USER (Nathan) specifically for the
+ * case where Render's own cron didn't send the 19:00 summary and this
+ * backstop had to step in. This fires regardless of whether the
+ * backstop itself then succeeds — the point is to flag that Render
+ * needs checking, not just to report the backstop's own outcome.
+ */
+function _alertRenderMissed_(detail) {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const botUrl = props.getProperty('BOT_URL') || 'https://hotel-line-bot.onrender.com';
+    const adminToken = props.getProperty('ADMIN_TOKEN') || 'apt2025@secret';
+    UrlFetchApp.fetch(botUrl + '/api/send-admin-alert', {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify({ note: '⚠️ Render ไม่ส่งสรุปแม่บ้าน 19:00\n' + detail }),
+      headers: { 'x-admin-token': adminToken },
+      muteHttpExceptions: true
+    });
+  } catch (e) {
+    Logger.log('[triggerHotelJob19] Failed to send render-missed alert: ' + e.message);
   }
 }
 
