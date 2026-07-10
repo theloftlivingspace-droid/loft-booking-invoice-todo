@@ -16,11 +16,15 @@
  *   can sleep.
  *
  * What this does:
- *   Calls hotel-line-bot's /api/test-hotel-job endpoint (added
- *   2026-07-09, runs the exact same runHotelJob() the internal cron
- *   uses) via a POST request. The HTTP request itself also serves as
- *   an extra wake-up ping for the Render instance, on top of
- *   UptimeRobot.
+ *   First checks /api/hotel-job-status (GET) — hotel-line-bot records
+ *   a Redis flag (hotel_job_last_run) whenever runHotelJob() succeeds,
+ *   whether triggered by its own cron or by this backstop. If today's
+ *   flag is already set, this function does nothing (Render's cron
+ *   worked fine, no need to duplicate). Only if it's NOT set does it
+ *   call /api/test-hotel-job (POST) — the same runHotelJob() the
+ *   internal cron uses — as a fallback. This way the maid group only
+ *   ever gets the summary once per day, from whichever path fires
+ *   first.
  *
  * Setup:
  *   1. Reuses BOT_URL / ADMIN_TOKEN Script Properties already set for
@@ -30,15 +34,12 @@
  *        Function: triggerHotelJob19
  *        Event source: Time-driven
  *        Type: Day timer
- *        Time: 7pm to 8pm (pick a specific time close to 19:00,
- *              e.g. 7:05pm, to run slightly after the internal cron
- *              in case that one succeeds first)
- *   3. Keep the internal node-cron running too — this is a backstop,
- *      not a replacement. If both fire, the maid group just gets the
- *      same summary twice; harmless but worth knowing. If you'd rather
- *      avoid the duplicate, remove the internal cron.schedule(CRON_SCHED, ...)
- *      call in hotel-line-bot/bot.js once this trigger is confirmed
- *      reliable for a few days.
+ *        Time: 7pm to 8pm (pick a specific time a few minutes after
+ *              19:00, e.g. 7:10pm, to give Render's own cron a chance
+ *              to run first)
+ *   3. Keep the internal node-cron running too — this is a backstop
+ *      only, and won't duplicate the message thanks to the status
+ *      check above.
  *
  * On failure:
  *   Logs to Apps Script's own execution log (Executions ▶ this run)
@@ -51,6 +52,31 @@ function triggerHotelJob19() {
   const botUrl = props.getProperty('BOT_URL') || 'https://hotel-line-bot.onrender.com';
   const adminToken = props.getProperty('ADMIN_TOKEN') || 'apt2025@secret';
 
+  // Step 1: check whether Render's own 19:00 cron already ran successfully
+  // today. Only fall back to firing the job ourselves if it didn't —
+  // this is a backstop, not a duplicate sender.
+  try {
+    const statusResp = UrlFetchApp.fetch(botUrl + '/api/hotel-job-status', {
+      method: 'get',
+      headers: { 'x-admin-token': adminToken },
+      muteHttpExceptions: true
+    });
+    const statusCode = statusResp.getResponseCode();
+    const statusBody = JSON.parse(statusResp.getContentText());
+
+    if (statusCode === 200 && statusBody.ranToday) {
+      Logger.log('[triggerHotelJob19] Render cron already ran today (' + statusBody.lastRun + ') — skipping, no action needed.');
+      return;
+    }
+    Logger.log('[triggerHotelJob19] Render cron has NOT run today yet (lastRun=' + statusBody.lastRun + ') — firing backstop.');
+  } catch (e) {
+    // Status check itself failed (e.g. instance asleep, Redis down) —
+    // treat as "didn't run" and fire the backstop anyway, better safe
+    // than silently missing the summary again.
+    Logger.log('[triggerHotelJob19] Status check failed (' + e.message + ') — assuming it did not run, firing backstop anyway.');
+  }
+
+  // Step 2: fire the job ourselves.
   try {
     const response = UrlFetchApp.fetch(botUrl + '/api/test-hotel-job', {
       method: 'post',
@@ -64,9 +90,9 @@ function triggerHotelJob19() {
     const body = response.getContentText();
 
     if (code === 200) {
-      Logger.log('[triggerHotelJob19] OK: ' + body);
+      Logger.log('[triggerHotelJob19] Backstop OK: ' + body);
     } else {
-      Logger.log('[triggerHotelJob19] FAILED (' + code + '): ' + body);
+      Logger.log('[triggerHotelJob19] Backstop FAILED (' + code + '): ' + body);
       _alertHotelJobFailure_('hotel-line-bot ตอบกลับ ' + code + ': ' + body);
     }
   } catch (e) {
