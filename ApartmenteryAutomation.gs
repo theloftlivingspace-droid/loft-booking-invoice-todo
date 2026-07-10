@@ -348,7 +348,7 @@ function runApartmenteryAutomation() {
       const summary = allErrors
         .map(e => `- ${e.guest || ''} ${e.room || e.resId || e.invoiceKey}: ${e.error}`)
         .join('\n');
-      UrlFetchApp.fetch(botUrl + '/api/send-maid-note', {
+      UrlFetchApp.fetch(botUrl + '/api/send-admin-alert', {
         method: 'post',
         contentType: 'application/json',
         payload: JSON.stringify({ note: `⚠️ Apartmentery automation มีรายการที่ error ${allErrors.length} รายการ:\n${summary}` }),
