@@ -74,6 +74,37 @@ function _dateMinusOneDay_(dateStr) {
 }
 
 /**
+ * One-time setup: run this ONCE from the Apps Script editor to wire
+ * runApartmenteryAutomation() to an hourly trigger. This was previously
+ * a manual "go do this yourself" step in the header comment above and
+ * was never actually done — confirmed 2026-07-10 via the Triggers tab
+ * only showing triggerHotelJob19, nothing for runApartmenteryAutomation.
+ * That's why new bookings never reached apartmentery automatically:
+ * the function itself was fine, it just had no trigger calling it.
+ *
+ * Also runs addApartmenteryBookingIdColumnIfMissing_() as part of setup
+ * (idempotent, safe even if the column already exists).
+ *
+ * Safe to re-run: removes any existing runApartmenteryAutomation
+ * trigger first, so running this twice won't create duplicates.
+ */
+function installApartmenteryAutomationTrigger() {
+  addApartmenteryBookingIdColumnIfMissing_();
+
+  const triggers = ScriptApp.getProjectTriggers();
+  for (const t of triggers) {
+    if (t.getHandlerFunction() === 'runApartmenteryAutomation') {
+      ScriptApp.deleteTrigger(t);
+    }
+  }
+  ScriptApp.newTrigger('runApartmenteryAutomation')
+    .timeBased()
+    .everyHours(1)
+    .create();
+  Logger.log('[installApartmenteryAutomationTrigger] Trigger installed — runApartmenteryAutomation will run every hour from now on.');
+}
+
+/**
  * Adds the "Apartmentery Booking ID" column to Sheet1 if it isn't there
  * yet. Idempotent — safe to call on every run (cheap no-op if present).
  */
