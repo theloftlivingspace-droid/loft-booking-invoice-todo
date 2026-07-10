@@ -190,17 +190,18 @@ function isApartmenterySessionExpiredError(err) {
 
 /**
  * Sends a LINE alert when the stored session has expired.
- * Reuses hotel-line-bot's existing /api/send-maid-note endpoint (same
- * BOT_URL / ADMIN_TOKEN Script Properties pattern as cancelBooking_ in
- * loft-booking-invoice-todo) rather than adding a new bot endpoint —
- * "note" is free text, so it doubles fine as a generic admin alert.
+ * Uses hotel-line-bot's /api/send-admin-alert endpoint (same BOT_URL /
+ * ADMIN_TOKEN Script Properties pattern as cancelBooking_ in
+ * loft-booking-invoice-todo) — sends 1:1 straight to Nathan (ADMIN_USER)
+ * instead of the maid group, since a session-expiry is a technical/admin
+ * issue, not something the housekeeping group needs to see.
  */
 function _notifyLineSessionFailure_(detail) {
   try {
     const props = PropertiesService.getScriptProperties();
     const botUrl = props.getProperty('BOT_URL') || 'https://hotel-line-bot.onrender.com';
     const adminToken = props.getProperty('ADMIN_TOKEN') || 'apt2025@secret';
-    UrlFetchApp.fetch(botUrl + '/api/send-maid-note', {
+    UrlFetchApp.fetch(botUrl + '/api/send-admin-alert', {
       method: 'post',
       contentType: 'application/json',
       payload: JSON.stringify({ note: '⚠️ Apartmentery session หมดอายุ\n' + detail }),
