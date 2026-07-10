@@ -47,6 +47,37 @@
  *   /api/send-admin-alert, so a failure here doesn't go unnoticed
  *   the way the silent 19:00 miss did.
  */
+/**
+ * One-time setup: run this ONCE from the Apps Script editor (select
+ * this function in the dropdown ▶ Run) instead of using Triggers ▶
+ * Add Trigger manually. The manual UI only offers hour-wide windows
+ * ("7pm to 8pm"), which could fire as early as 19:00:01 — too close
+ * to Render's own 19:00:00 cron and risks a false "didn't run yet"
+ * read. ScriptApp's trigger builder supports .nearMinute(), which the
+ * UI doesn't expose, giving a tighter target of ~7:10pm (within a
+ * ~15 min window Google randomizes around it, but centered later than
+ * the hour-block option).
+ *
+ * Safe to re-run: it removes any existing triggerHotelJob19 trigger
+ * first, so running this twice won't create duplicates.
+ */
+function installHotelJobTrigger19() {
+  const triggers = ScriptApp.getProjectTriggers();
+  for (const t of triggers) {
+    if (t.getHandlerFunction() === 'triggerHotelJob19') {
+      ScriptApp.deleteTrigger(t);
+    }
+  }
+  ScriptApp.newTrigger('triggerHotelJob19')
+    .timeBased()
+    .atHour(19)
+    .nearMinute(10)
+    .everyDays(1)
+    .inTimezone('Asia/Bangkok')
+    .create();
+  Logger.log('[installHotelJobTrigger19] Trigger installed for ~19:10 Asia/Bangkok daily.');
+}
+
 function triggerHotelJob19() {
   const props = PropertiesService.getScriptProperties();
   const botUrl = props.getProperty('BOT_URL') || 'https://hotel-line-bot.onrender.com';
