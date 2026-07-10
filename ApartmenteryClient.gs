@@ -247,12 +247,108 @@ function _notifyLineSessionFailure_(detail) {
  * @param {string} [opts.note]         Booking-level note (e.g. "Airbnb ABB-XXXX")
  * @param {string} [opts.customerNote] Customer-level note
  */
+/** Collapses whitespace/tabs/newlines and lowercases, for name comparison. */
+function _normalizeGuestNameForMatch_(name) {
+  return String(name || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * apartmentery's customer <option> labels look like "Name / Channel " or
+ * "Name (phone or ID number)" or sometimes both, or neither (plain "Name").
+ * Strips the trailing "(...)" and " / Channel" parts to get just the name,
+ * so it can be compared against a guest name pulled from Sheet1.
+ */
+function _customerOptionCoreName_(label) {
+  let s = String(label || '')
+    .replace(/&#x27;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim();
+  s = s.replace(/\s*\([^)]*\)\s*$/, '').trim(); // trailing "(phone/ID)"
+  const slashIdx = s.lastIndexOf(' / ');
+  if (slashIdx !== -1) s = s.slice(0, slashIdx).trim(); // trailing " / Channel"
+  return s;
+}
+
+/** Extracts every {id, label} from the booking form's <select id="customerId">. */
+function _extractCustomerOptions_(html) {
+  const selectMatch = html.match(/<select[^>]*id="customerId"[\s\S]*?<\/select>/);
+  if (!selectMatch) return [];
+  const optRe = /<option\s+value="([^"]*)"[^>]*>([\s\S]*?)<\/option>/g;
+  const options = [];
+  let m;
+  while ((m = optRe.exec(selectMatch[0])) !== null) {
+    options.push({ id: m[1], label: m[2] });
+  }
+  return options;
+}
+
+/**
+ * Looks for an exact (whitespace/case-insensitive) name match against
+ * apartmentery's existing customer list, so a returning guest can be
+ * booked against their real customerId instead of creating a duplicate.
+ * Returns one of:
+ *   { status: 'found', id }        — exactly one existing customer matches
+ *   { status: 'ambiguous', ids }   — 2+ different customers share the name
+ *   { status: 'none' }             — no match
+ * Deliberately exact-match only (no fuzzy matching) — a wrong guess here
+ * silently attaches a booking to the wrong person's customer record.
+ */
+function _findExistingApartmenteryCustomerId_(html, guestName) {
+  const target = _normalizeGuestNameForMatch_(guestName);
+  if (!target) return { status: 'none' };
+  const matchIds = new Set();
+  _extractCustomerOptions_(html).forEach(opt => {
+    if (_normalizeGuestNameForMatch_(_customerOptionCoreName_(opt.label)) === target) {
+      matchIds.add(opt.id);
+    }
+  });
+  if (matchIds.size === 0) return { status: 'none' };
+  if (matchIds.size === 1) return { status: 'found', id: Array.from(matchIds)[0] };
+  return { status: 'ambiguous', ids: Array.from(matchIds) };
+}
+
 function createApartmenteryBooking(branchId, unitId, opts) {
   if (!opts || !opts.startDate || !opts.guestName) {
     throw new Error('createApartmenteryBooking requires at least startDate and guestName.');
   }
 
   const path = `/user/branch/${branchId}/unit/${unitId}/booking`;
+
+  // Repeat-guest matching: apartmentery's own duplicate-customer validation
+  // rejects a "new" customer submission whose name matches an existing
+  // customer record that has blank idNo/mobile (confirmed 2026-07-09 — this
+  // broke a real automation run for a genuinely returning guest). Look the
+  // guest up against the form's own customer list first; if there's a
+  // single unambiguous name match, book against that existing customerId
+  // instead of creating a new record. An ambiguous match (2+ different
+  // people share the exact name) or no match at all falls through to
+  // creating a new customer as before — guessing wrong on an ambiguous
+  // match would silently attach the booking to the wrong person, which is
+  // worse than occasionally hitting apartmentery's duplicate-name
+  // validation error (which is now visible in the log via
+  // _extractPlayErrorMessage_ below, instead of a generic 500).
+  let existingCustomerId = null;
+  try {
+    const formResponse = _apartmenteryFetch_(path, { method: 'get' });
+    if (formResponse.getResponseCode() === 200) {
+      const match = _findExistingApartmenteryCustomerId_(formResponse.getContentText(), opts.guestName);
+      if (match.status === 'found') {
+        existingCustomerId = match.id;
+        Logger.log(`createApartmenteryBooking: matched guest "${opts.guestName}" to existing ` +
+          `apartmentery customerId ${existingCustomerId} — booking as existing customer.`);
+      } else if (match.status === 'ambiguous') {
+        Logger.log(`createApartmenteryBooking: guest "${opts.guestName}" matches ${match.ids.length} ` +
+          `different existing customer records (ids ${match.ids.join(', ')}) — too ambiguous to pick ` +
+          `automatically, creating as a new customer instead.`);
+      }
+    }
+  } catch (err) {
+    if (isApartmenterySessionExpiredError(err)) throw err; // don't swallow — caller needs to stop
+    Logger.log(`createApartmenteryBooking: couldn't check for an existing customer match for ` +
+      `"${opts.guestName}" (${err.message}) — proceeding as a new customer.`);
+  }
 
   // The `reminder` checkbox's sibling fields (remindEvery, reminderFrequency,
   // remindOnDayInMonth, etc.) are never removed from the booking form's DOM —
@@ -272,7 +368,7 @@ function createApartmenteryBooking(branchId, unitId, opts) {
     startDate: opts.startDate,
     endDate: opts.endDate || '',
     note: opts.note || '',
-    customerType: 'new',
+    customerType: existingCustomerId ? 'existing' : 'new',
     'customerName': opts.guestName,
     'customerMobileNo': opts.guestMobile || '',
     'customerIdNo': '',
@@ -287,6 +383,10 @@ function createApartmenteryBooking(branchId, unitId, opts) {
     remindOnMonthInYear: monthOfYear,
     remindInvoiceDayBefore: '5'
   };
+  // customerId is only meaningful (and only read server-side) when
+  // customerType is 'existing' — leave it out entirely for new customers,
+  // matching how this already worked before repeat-guest matching existed.
+  if (existingCustomerId) payload.customerId = existingCustomerId;
 
   const response = _apartmenteryFetch_(path, { method: 'post', payload: payload });
 
