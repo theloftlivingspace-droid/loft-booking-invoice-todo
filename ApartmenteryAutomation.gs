@@ -228,10 +228,15 @@ function autoCreateApartmenteryBookings() {
     Logger.log(`attempting booking for ${b.resId} room ${b.room} guest ${b.guest}`);
 
     try {
+      // Apartmentery customerName follows Nathan's original manual naming
+      // convention "Guest Name / Channel" (e.g. "Pranee Antov / Expedia")
+      // — the automation was previously sending just the bare guest name.
+      const guestNameWithChannel = b.channel ? `${b.guest} / ${b.channel}` : b.guest;
+
       const created = createApartmenteryBookingForRoom(b.room, {
         startDate: b.checkin,
         endDate: b.checkout || '',
-        guestName: b.guest,
+        guestName: guestNameWithChannel,
         note: `${b.channel} ${b.resId}`.trim()
       });
 
