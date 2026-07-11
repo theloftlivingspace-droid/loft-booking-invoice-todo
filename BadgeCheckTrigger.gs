@@ -1,8 +1,8 @@
 /**
  * BadgeCheckTrigger.gs
  * -----------------------------------------------------------------------
- * External backstop for hotel-line-bot's internal */5 * * * * node-cron
- * job (runBadgeCheck → Web Push that updates the iOS home-screen badge).
+ * External backstop for hotel-line-bot's internal 5-minute node-cron job
+ * (runBadgeCheck → Web Push that updates the iOS home-screen badge).
  *
  * Why this exists:
  *   Same root cause as HotelJobTrigger.gs's 19:00 miss on 2026-07-09:
