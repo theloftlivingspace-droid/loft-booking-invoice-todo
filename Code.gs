@@ -403,7 +403,21 @@ function updateCheckoutDate_(body) {
   };
 
   try {
-    const aptId = getApartmenteryBookingId_(resId);
+    var aptId = getApartmenteryBookingId_(resId);
+    if (!aptId) {
+      // No bookingId recorded — could just be a booking the automation
+      // hasn't created yet (next hourly run will pick it up with the new
+      // date), OR one that was added to apartmentery manually before the
+      // automation existed and so never got its ID written back to
+      // Sheet1. Try to recover the latter case by matching guest name +
+      // exact checkin date on the room's apartmentery calendar.
+      var foundId = findApartmenteryBookingIdForRoomByGuest_(room, guest, checkin);
+      if (foundId) {
+        aptId = foundId;
+        setApartmenteryBookingId_(resId, foundId);
+        result.apartmenteryBackfilled = true;
+      }
+    }
     if (aptId) {
       const r = updateApartmenteryBookingEndDateForRoom(room, aptId, newCheckout);
       if (r && r.skipped) {

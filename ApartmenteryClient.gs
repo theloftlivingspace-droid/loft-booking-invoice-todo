@@ -560,6 +560,54 @@ function updateApartmenteryBookingEndDate(branchId, unitId, bookingId, newEndDat
 }
 
 /**
+ * Same source data as _findBookingIdByGuestName_ (the unit's calendar
+ * events array), but additionally requires the event's start date to
+ * exactly match checkinDate before returning a match. Used to recover
+ * the apartmentery bookingId for a booking that was created manually in
+ * apartmentery *before* the automation existed — those never got an
+ * "Apartmentery Booking ID" written back to Sheet1, so getApartmenteryBookingId_
+ * comes back empty even though the booking is really there.
+ *
+ * Deliberately returns null instead of guessing when there's no exact
+ * date match (e.g. a returning guest with an older, unrelated stay on
+ * the same unit) — silently attaching this update to the wrong stay
+ * would corrupt someone else's booking dates, which is worse than just
+ * falling back to "sync manually this time".
+ */
+function _findBookingIdByGuestNameAndDate_(html, guestName, checkinDate) {
+  html = String(html || '');
+  const blockRe = /\{\s*title:\s*'((?:[^'\\]|\\.)*)'[\s\S]*?start:\s*'([^']*)'[\s\S]*?url:\s*'([^']*)'\s*\}/g;
+  let m;
+  const matches = [];
+  while ((m = blockRe.exec(html)) !== null) {
+    const title = m[1];
+    const start = String(m[2] || '').slice(0, 10);
+    const url = m[3];
+    if (title.indexOf(guestName) !== -1) {
+      const idMatch = url.match(/\/booking\/(\d+)/);
+      if (idMatch) matches.push({ id: idMatch[1], start: start });
+    }
+  }
+  const exact = matches.find(x => x.start === checkinDate);
+  return exact ? exact.id : null;
+}
+
+/**
+ * Convenience wrapper: looks up a room's apartmentery calendar and tries
+ * to find a booking matching guestName + checkinDate exactly. Returns
+ * null if the room isn't mapped, the page can't be fetched, or there's
+ * no exact match — never guesses.
+ */
+function findApartmenteryBookingIdForRoomByGuest_(roomRaw, guestName, checkinDate) {
+  const unit = getApartmenteryUnitForRoom(roomRaw);
+  if (!unit) return null;
+  const path = `/user/branch/${unit.branchId}/unit/${unit.unitId}/booking`;
+  const response = _apartmenteryFetch_(path, { method: 'get' });
+  if (response.getResponseCode() !== 200) return null;
+  return _findBookingIdByGuestNameAndDate_(response.getContentText(), guestName, checkinDate);
+}
+
+/**
  * Convenience wrapper taking a Sheet1 room string instead of raw
  * branchId/unitId, matching the *ForRoom naming pattern used elsewhere.
  */
