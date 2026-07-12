@@ -421,14 +421,20 @@ function createApartmenteryBooking(branchId, unitId, opts) {
   // Diagnostic logging — payload sent + the actual error message from
   // Play's error page (title/CSS alone told us nothing useful), so a
   // non-redirect response can actually be debugged instead of guessed at.
+  const extractedError = _extractPlayErrorMessage_(response.getContentText());
   Logger.log('createApartmenteryBooking FAILED — payload sent: ' + JSON.stringify(payload));
-  Logger.log('createApartmenteryBooking FAILED — response code ' + code + ', extracted error: ' +
-    _extractPlayErrorMessage_(response.getContentText()));
+  Logger.log('createApartmenteryBooking FAILED — response code ' + code + ', extracted error: ' + extractedError);
 
-  throw new Error(
+  const err = new Error(
     `Booking creation for unit ${unitId} (guest ${opts.guestName}) did not redirect ` +
     `as expected (HTTP ${code}). Response may indicate a validation error — inspect manually.`
   );
+  err.apartmenteryError = extractedError;
+  // "การจองนี้ชนกับการจองอื่น" = this booking collides with an existing one on the
+  // same unit/dates — near-always means the booking was already created manually
+  // in apartmentery before automation existed, not a real scheduling conflict.
+  err.isCollision = /ชนกับการจองอื่น/.test(extractedError);
+  throw err;
 }
 
 /**
