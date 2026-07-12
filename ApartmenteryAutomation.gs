@@ -498,6 +498,11 @@ function backfillMissingApartmenteryBookings() {
  * Usage: run with a Sheet1-style room string, e.g.
  *   debugApartmenteryUnitCalendar('205 Allure')
  */
+/** No-argument wrapper for the Run button — GAS's editor can't pass parameters. */
+function debugApartmenteryUnitCalendar205() {
+  return debugApartmenteryUnitCalendar('205 Allure');
+}
+
 function debugApartmenteryUnitCalendar(roomRaw) {
   const unit = getApartmenteryUnitForRoom(roomRaw);
   if (!unit) {
