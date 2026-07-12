@@ -1064,6 +1064,13 @@ function pruneBookingDoneMap_(map) {
  * marked done now. Safe to re-run any time — run once from the Apps Script
  * editor after this deploy to fix already-stuck rows like ABB-zhgggtr-20260712.
  */
+// Public wrapper — repairStuckDoneFlags_ ends in _ so Apps Script treats it
+// as private and hides it from the editor's "Select function" Run dropdown.
+// Run THIS one instead from the dropdown/Run button.
+function runRepairStuckDoneFlags() {
+  repairStuckDoneFlags_();
+}
+
 function repairStuckDoneFlags_() {
   const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
   const src = ss.getSheetByName(SRC_BOOKING_SHEET);
