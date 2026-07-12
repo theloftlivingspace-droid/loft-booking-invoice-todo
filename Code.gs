@@ -69,6 +69,9 @@ function doPost(e) {
     if (action === 'earlyCheckout') {
       return jsonResponse_(earlyCheckout_(body));
     }
+    if (action === 'updateCheckout') {
+      return jsonResponse_(updateCheckoutDate_(body));
+    }
 
     return jsonResponse_({ ok: false, error: 'Unknown POST action: ' + action });
   } catch (err) {
@@ -315,6 +318,111 @@ function earlyCheckout_(body) {
   }
 
   return { ok: true, resId: resId, checkedOutAt: now, newCheckout: newCheckout, sheet1Updated: sheet1Updated };
+}
+
+/**
+ * Manual "edit checkout date" action — for cases where Little Hotelier
+ * changes a guest's checkout date (e.g. an extended stay) but does NOT
+ * send a modification email, so the Gmail-parsing pipeline never sees it.
+ * Nathan enters the new checkout date by hand in the-loft-admin, which
+ * calls this to:
+ *   1) update the เช็คเอาท์ cell in Sheet1 — the source of truth that
+ *      every other view (room-status grid, KPI cards, CheckInOut) reads.
+ *   2) if the booking already has an Apartmentery bookingId, push the new
+ *      end date there too, reusing updateApartmenteryBookingEndDateForRoom
+ *      — the same "set end date" call the same-day-turnover buffer logic
+ *      already uses to shrink bookings; it works equally well to extend.
+ *   3) refuse the change if it would overlap another booking already on
+ *      the same room — that's a real conflict Nathan has to resolve with
+ *      the guest/OTA first, not something to silently paper over.
+ * LINE notification to the maid group is fired from the client after a
+ * successful save (same pattern as setNote / saveNote in CheckInOut.tsx),
+ * not from here.
+ */
+function updateCheckoutDate_(body) {
+  const resId = String(body.resId || '').trim();
+  const newCheckout = String(body.newCheckout || '').trim();
+  if (!resId) return { ok: false, error: 'resId required' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(newCheckout)) return { ok: false, error: 'newCheckout must be YYYY-MM-DD' };
+
+  const ss  = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
+  if (!src) return { ok: false, error: 'Sheet1 not found' };
+
+  const data   = src.getDataRange().getValues();
+  const header = data[0];
+  const idx    = indexMap_(header, ['ResId', 'เลขห้อง', 'เช็คเอาท์', 'ชื่อแขก', 'เช็คอิน']);
+  if (idx.ResId < 0 || idx['เช็คเอาท์'] < 0) return { ok: false, error: 'required columns not found' };
+
+  var rowIdx = -1, room = '', guest = '', checkin = '', oldCheckout = '';
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][idx.ResId] || '').trim() === resId) {
+      rowIdx = i;
+      room = String(data[i][idx['เลขห้อง']] || '').trim();
+      guest = idx['ชื่อแขก'] >= 0 ? String(data[i][idx['ชื่อแขก']] || '').trim() : '';
+      checkin = idx['เช็คอิน'] >= 0 ? formatCellDate_(data[i][idx['เช็คอิน']]) : '';
+      oldCheckout = formatCellDate_(data[i][idx['เช็คเอาท์']]);
+      break;
+    }
+  }
+  if (rowIdx === -1) return { ok: false, error: 'resId not found: ' + resId };
+  if (/ยกเลิก|cancel/i.test(room)) return { ok: false, error: 'booking is cancelled' };
+  if (newCheckout === oldCheckout) return { ok: false, error: 'newCheckout is the same as current checkout' };
+
+  // Conflict check — only matters when extending: another booking on the
+  // same room could already start somewhere inside [oldCheckout, newCheckout).
+  if (newCheckout > oldCheckout) {
+    const rn = roomNum_(room);
+    for (var j = 1; j < data.length; j++) {
+      if (j === rowIdx) continue;
+      const otherRoom = String(data[j][idx['เลขห้อง']] || '').trim();
+      if (/ยกเลิก|cancel/i.test(otherRoom)) continue;
+      if (roomNum_(otherRoom) !== rn) continue;
+      const otherCheckin = idx['เช็คอิน'] >= 0 ? formatCellDate_(data[j][idx['เช็คอิน']]) : '';
+      if (!otherCheckin) continue;
+      if (otherCheckin >= oldCheckout && otherCheckin < newCheckout) {
+        return {
+          ok: false,
+          error: 'conflict',
+          conflict: {
+            resId: String(data[j][idx.ResId] || '').trim(),
+            guest: idx['ชื่อแขก'] >= 0 ? String(data[j][idx['ชื่อแขก']] || '').trim() : '',
+            checkin: otherCheckin,
+          }
+        };
+      }
+    }
+  }
+
+  src.getRange(rowIdx + 1, idx['เช็คเอาท์'] + 1).setValue(newCheckout);
+  triggerStyleSheet1_();
+
+  const result = {
+    ok: true, resId: resId, room: room, guest: guest, checkin: checkin,
+    oldCheckout: oldCheckout, newCheckout: newCheckout, apartmenterySynced: false
+  };
+
+  try {
+    const aptId = getApartmenteryBookingId_(resId);
+    if (aptId) {
+      const r = updateApartmenteryBookingEndDateForRoom(room, aptId, newCheckout);
+      if (r && r.skipped) {
+        result.apartmenteryNote = r.reason;
+      } else {
+        result.apartmenterySynced = true;
+      }
+    } else {
+      result.apartmenteryNote = 'no apartmentery bookingId yet — nothing to sync';
+    }
+  } catch (e) {
+    if (isApartmenterySessionExpiredError(e)) {
+      result.apartmenteryNote = 'Apartmentery session expired — update the date there manually';
+    } else {
+      result.apartmenteryNote = 'Apartmentery sync failed: ' + e;
+    }
+  }
+
+  return result;
 }
 
 function getCheckStatusMap_() {
