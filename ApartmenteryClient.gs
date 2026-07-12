@@ -593,11 +593,32 @@ function _apartmenteryCalendarDateToIso_(dateStr) {
   return `${m[3]}-${months[m[2]]}-${m[1].padStart(2, '0')}`;
 }
 
+/**
+ * True if every word in guestName also appears as a word in title,
+ * ignoring case, punctuation, and word order. Handles Sheet1 storing some
+ * guests as "Lastname, Firstname" while apartmentery's title has
+ * "Firstname Lastname / Channel" (confirmed 2026-07-12: this order swap
+ * was the reason ~18 collisions still failed to recover after the date-
+ * format fix — e.g. Sheet1 "Lebedev, Egor" vs apartmentery "Egor Lebedev").
+ */
+function _namesMatchIgnoringOrder_(guestName, title) {
+  const normalize = s => String(s || '')
+    .toLowerCase()
+    .replace(/[,\/]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  const guestWords = normalize(guestName);
+  if (guestWords.length === 0) return false;
+  const titleWords = new Set(normalize(title));
+  return guestWords.every(w => titleWords.has(w));
+}
+
 function _findBookingIdByGuestNameAndDate_(html, guestName, checkinDate) {
   html = String(html || '');
   const blockRe = /\{\s*title:\s*'((?:[^'\\]|\\.)*)'[\s\S]*?start:\s*'([^']*)'[\s\S]*?url:\s*'([^']*)'\s*\}/g;
   let m;
-  const matches = [];
+  const exactMatches = [];
+  const looseMatches = [];
   while ((m = blockRe.exec(html)) !== null) {
     const title = m[1];
     // Confirmed 2026-07-12 (debugApartmenteryUnitCalendar): this page
@@ -606,12 +627,16 @@ function _findBookingIdByGuestNameAndDate_(html, guestName, checkinDate) {
     // checkinDate silently matched nothing for every single booking.
     const start = _apartmenteryCalendarDateToIso_(m[2]);
     const url = m[3];
+    const idMatch = url.match(/\/booking\/(\d+)/);
+    if (!idMatch) continue;
     if (title.indexOf(guestName) !== -1) {
-      const idMatch = url.match(/\/booking\/(\d+)/);
-      if (idMatch) matches.push({ id: idMatch[1], start: start });
+      exactMatches.push({ id: idMatch[1], start: start });
+    } else if (_namesMatchIgnoringOrder_(guestName, title)) {
+      looseMatches.push({ id: idMatch[1], start: start });
     }
   }
-  const exact = matches.find(x => x.start === checkinDate);
+  const exact = exactMatches.find(x => x.start === checkinDate)
+    || looseMatches.find(x => x.start === checkinDate);
   return exact ? exact.id : null;
 }
 
