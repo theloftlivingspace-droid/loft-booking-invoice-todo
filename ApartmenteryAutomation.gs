@@ -502,8 +502,17 @@ function backfillMissingApartmenteryBookings() {
 function debugApartmenteryUnitCalendar205() {
   return debugApartmenteryUnitCalendar('205 Allure');
 }
+function debugApartmenteryUnitCalendar204() {
+  return debugApartmenteryUnitCalendar('204 Elegance');
+}
+function debugApartmenteryUnitCalendar203() {
+  return debugApartmenteryUnitCalendar('203 Allure');
+}
+function debugApartmenteryUnitCalendar103() {
+  return debugApartmenteryUnitCalendar('103 Elegance');
+}
 
-function debugApartmenteryUnitCalendar(roomRaw) {
+function debugApartmenteryUnitCalendar(roomRaw, monthFilter) {
   const unit = getApartmenteryUnitForRoom(roomRaw);
   if (!unit) {
     Logger.log(`debugApartmenteryUnitCalendar: room "${roomRaw}" not found in ROOM_TO_UNIT_ID.`);
@@ -524,8 +533,16 @@ function debugApartmenteryUnitCalendar(roomRaw) {
   while ((m = blockRe.exec(html)) !== null) {
     events.push({ title: m[1], start: m[2], url: m[3] });
   }
-  Logger.log(`debugApartmenteryUnitCalendar: found ${events.length} events for unit ${unit.unitId}:`);
-  events.forEach((e, i) => Logger.log(`  [${i}] title="${e.title}" start=${e.start} url=${e.url}`));
+  Logger.log(`debugApartmenteryUnitCalendar: found ${events.length} total events for unit ${unit.unitId}`);
+
+  // Default filter: Feb-Apr 2026, since that's usually the range worth
+  // inspecting manually — pass monthFilter=null to see everything instead.
+  const filtered = monthFilter === null ? events : events.filter(e => {
+    const iso = _apartmenteryCalendarDateToIso_(e.start);
+    return iso && iso >= '2026-02-01' && iso < '2026-04-06';
+  });
+  Logger.log(`debugApartmenteryUnitCalendar: showing ${filtered.length} events (Feb 1 - Apr 5 2026 unless monthFilter=null was passed):`);
+  filtered.forEach((e, i) => Logger.log(`  [${i}] title="${e.title}" start=${e.start} url=${e.url}`));
 
   if (events.length === 0) {
     Logger.log('debugApartmenteryUnitCalendar: no events matched the expected regex — logging first 3000 chars of raw HTML instead, the page structure may have changed:');
