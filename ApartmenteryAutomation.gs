@@ -328,6 +328,126 @@ function autoCreateApartmenteryInvoicesAndReceipts() {
 }
 
 /**
+ * Backfill for EXISTING rows that already have no apartmentery bookingId
+ * but will NEVER be picked up by autoCreateApartmenteryBookings(), because
+ * that function skips any resId already marked done in booking_done_v1 —
+ * and that flag predates apartmentery automation, so basically all of
+ * Feb–Jul 2026's history is already marked done there for unrelated
+ * reasons (general booking-todo UI), even though none of them ever got
+ * an apartmentery booking created. Confirmed 2026-07-12: 130+ rows in
+ * Sheet1 have an empty "Apartmentery Booking ID" column.
+ *
+ * This is the SAME logic as autoCreateApartmenteryBookings() (same-day
+ * turnover handling included) minus the `if (b.done) continue` skip, and
+ * it deliberately does NOT call setBookingDone() — that flag is shared
+ * with the unrelated booking-todo UI and shouldn't be touched by this.
+ *
+ * Safe to re-run / resumable: only ever touches rows that (a) aren't
+ * cancelled and (b) don't already have an Apartmentery Booking ID, so a
+ * run that stops early (time budget or session expiry) picks up exactly
+ * where it left off next time.
+ *
+ * Has a ~5 min runtime budget to stay under Apps Script's 6-min execution
+ * limit for ~130 sequential HTTP calls to apartmentery.com — logs how many
+ * are left if it has to stop early; just run it again to continue.
+ */
+function backfillMissingApartmenteryBookings() {
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const todayStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
+  const items = getBookingToAdd_(ss, todayStr);
+  const startTime = Date.now();
+  const MAX_RUNTIME_MS = 5 * 60 * 1000;
+
+  Logger.log(`backfillMissingApartmenteryBookings: ${items.length} total rows from getBookingToAdd_`);
+
+  const result = { created: 0, skipped: 0, sessionExpired: false, timedOut: false, errors: [] };
+
+  // Same same-day-turnover map as autoCreateApartmenteryBookings — built
+  // from ALL items (not just the ones missing an id) so a turnover against
+  // an already-created booking still resolves correctly.
+  const outgoingByRoom = {};
+  items.forEach(x => {
+    if (/ยกเลิก|cancel/i.test(x.room)) return;
+    if (!x.checkout) return;
+    const rn = roomNum_(x.room);
+    if (!outgoingByRoom[rn]) outgoingByRoom[rn] = {};
+    outgoingByRoom[rn][x.checkout] = x.resId;
+  });
+
+  for (const b of items) {
+    if (Date.now() - startTime > MAX_RUNTIME_MS) {
+      Logger.log('backfillMissingApartmenteryBookings: stopping early (time budget) — re-run to continue with the rest.');
+      result.timedOut = true;
+      break;
+    }
+
+    if (!b.resId) continue;
+    if (/ยกเลิก|cancel/i.test(b.room)) { Logger.log(`skip ${b.resId} (${b.room}): cancelled`); continue; }
+    if (getApartmenteryBookingId_(b.resId)) { continue; } // already backfilled or created normally
+
+    const roomOutgoing = outgoingByRoom[roomNum_(b.room)];
+    const outgoingResId = roomOutgoing && roomOutgoing[b.checkin];
+    if (outgoingResId && outgoingResId !== b.resId) {
+      const outgoingAptId = getApartmenteryBookingId_(outgoingResId);
+      if (!outgoingAptId) {
+        Logger.log(`skip ${b.resId} (${b.room}): same-day turnover with ${outgoingResId}, but that booking has no apartmentery bookingId yet — will retry next run.`);
+        result.skipped++;
+        continue;
+      }
+      try {
+        const newEndDate = _dateMinusOneDay_(b.checkin);
+        Logger.log(`same-day turnover: shrinking ${outgoingResId} (${b.room}) apartmentery bookingId ${outgoingAptId} endDate to ${newEndDate} before creating ${b.resId}`);
+        updateApartmenteryBookingEndDateForRoom(b.room, outgoingAptId, newEndDate);
+      } catch (err) {
+        if (isApartmenterySessionExpiredError(err)) {
+          Logger.log(`SESSION EXPIRED while shrinking endDate for ${outgoingResId} (${b.room}): ${err.message}`);
+          result.sessionExpired = true;
+          break;
+        }
+        Logger.log(`skip ${b.resId} (${b.room}): failed to shrink outgoing booking ${outgoingResId}'s endDate — ${err.message}`);
+        result.skipped++;
+        result.errors.push({ resId: b.resId, room: b.room, error: err.message });
+        continue;
+      }
+    }
+
+    Logger.log(`[backfill] attempting booking for ${b.resId} room ${b.room} guest ${b.guest}`);
+
+    try {
+      const guestNameWithChannel = b.channel ? `${b.guest} / ${b.channel}` : b.guest;
+      const created = createApartmenteryBookingForRoom(b.room, {
+        startDate: b.checkin,
+        endDate: b.checkout || '',
+        guestName: guestNameWithChannel,
+        note: `${b.channel} ${b.resId}`.trim()
+      });
+
+      if (created && created.skipped) {
+        Logger.log(`skip ${b.resId} (${b.room}): ${created.reason}`);
+        result.skipped++;
+        continue;
+      }
+
+      setApartmenteryBookingId_(b.resId, created.bookingId);
+      Logger.log(`[backfill] created ${b.resId} (${b.room}) -> apartmentery bookingId ${created.bookingId}`);
+      result.created++;
+
+    } catch (err) {
+      if (isApartmenterySessionExpiredError(err)) {
+        Logger.log(`SESSION EXPIRED while creating booking for ${b.resId} (${b.room}): ${err.message}`);
+        result.sessionExpired = true;
+        break;
+      }
+      Logger.log(`ERROR creating booking for ${b.resId} (${b.room}): ${err.message}`);
+      result.errors.push({ resId: b.resId, guest: b.guest, room: b.room, error: err.message });
+    }
+  }
+
+  Logger.log('backfillMissingApartmenteryBookings result: ' + JSON.stringify(result));
+  return result;
+}
+
+/**
  * Single entry point — run this from a time-driven trigger.
  * Runs booking creation first (so same-run invoices can find a freshly
  * created apartmentery bookingId), then invoice+receipt creation.
