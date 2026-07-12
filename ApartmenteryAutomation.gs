@@ -486,6 +486,51 @@ function backfillMissingApartmenteryBookings() {
 }
 
 /**
+ * DIAGNOSTIC ONLY — not part of the automation flow. Run manually when
+ * debugging why createApartmenteryBooking keeps reporting collisions that
+ * findApartmenteryBookingIdForRoomByGuest_ can't recover (confirmed
+ * 2026-07-12: 0 recoveries across 3 backfill attempts, even after fixing
+ * the guest-name-suffix bug). Fetches the unit's booking-listing page and
+ * logs every {title, start, end, url} event exactly as embedded in the
+ * page's fullCalendar array, so we can see what's ACTUALLY occupying the
+ * unit's calendar instead of guessing further.
+ *
+ * Usage: run with a Sheet1-style room string, e.g.
+ *   debugApartmenteryUnitCalendar('205 Allure')
+ */
+function debugApartmenteryUnitCalendar(roomRaw) {
+  const unit = getApartmenteryUnitForRoom(roomRaw);
+  if (!unit) {
+    Logger.log(`debugApartmenteryUnitCalendar: room "${roomRaw}" not found in ROOM_TO_UNIT_ID.`);
+    return;
+  }
+  const path = `/user/branch/${unit.branchId}/unit/${unit.unitId}/booking`;
+  const response = _apartmenteryFetch_(path, { method: 'get' });
+  Logger.log(`debugApartmenteryUnitCalendar: GET ${path} -> HTTP ${response.getResponseCode()}`);
+
+  const html = response.getContentText();
+  // Same pattern as _findBookingIdByGuestName_ / _findBookingIdByGuestNameAndDate_
+  // (already proven to match this page's structure) — title/start/url only,
+  // since requiring an 'end' field here too risked a false "0 events" result
+  // if events don't reliably include one in this exact position.
+  const blockRe = /\{\s*title:\s*'((?:[^'\\]|\\.)*)'[\s\S]*?start:\s*'([^']*)'[\s\S]*?url:\s*'([^']*)'\s*\}/g;
+  let m;
+  const events = [];
+  while ((m = blockRe.exec(html)) !== null) {
+    events.push({ title: m[1], start: m[2], url: m[3] });
+  }
+  Logger.log(`debugApartmenteryUnitCalendar: found ${events.length} events for unit ${unit.unitId}:`);
+  events.forEach((e, i) => Logger.log(`  [${i}] title="${e.title}" start=${e.start} url=${e.url}`));
+
+  if (events.length === 0) {
+    Logger.log('debugApartmenteryUnitCalendar: no events matched the expected regex — logging first 3000 chars of raw HTML instead, the page structure may have changed:');
+    Logger.log(html.slice(0, 3000));
+  }
+
+  return events;
+}
+
+/**
  * Single entry point — run this from a time-driven trigger.
  * Runs booking creation first (so same-run invoices can find a freshly
  * created apartmentery bookingId), then invoice+receipt creation.
