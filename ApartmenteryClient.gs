@@ -580,6 +580,19 @@ function updateApartmenteryBookingEndDate(branchId, unitId, bookingId, newEndDat
  * would corrupt someone else's booking dates, which is worse than just
  * falling back to "sync manually this time".
  */
+/**
+ * Converts apartmentery's calendar date format ('09 Jul 2026') to
+ * 'YYYY-MM-DD' so it can be compared against Sheet1's checkin dates.
+ * Returns null if the string doesn't match the expected format.
+ */
+function _apartmenteryCalendarDateToIso_(dateStr) {
+  const months = { Jan:'01', Feb:'02', Mar:'03', Apr:'04', May:'05', Jun:'06',
+    Jul:'07', Aug:'08', Sep:'09', Oct:'10', Nov:'11', Dec:'12' };
+  const m = String(dateStr || '').trim().match(/^(\d{1,2}) (\w{3}) (\d{4})$/);
+  if (!m || !months[m[2]]) return null;
+  return `${m[3]}-${months[m[2]]}-${m[1].padStart(2, '0')}`;
+}
+
 function _findBookingIdByGuestNameAndDate_(html, guestName, checkinDate) {
   html = String(html || '');
   const blockRe = /\{\s*title:\s*'((?:[^'\\]|\\.)*)'[\s\S]*?start:\s*'([^']*)'[\s\S]*?url:\s*'([^']*)'\s*\}/g;
@@ -587,7 +600,11 @@ function _findBookingIdByGuestNameAndDate_(html, guestName, checkinDate) {
   const matches = [];
   while ((m = blockRe.exec(html)) !== null) {
     const title = m[1];
-    const start = String(m[2] || '').slice(0, 10);
+    // Confirmed 2026-07-12 (debugApartmenteryUnitCalendar): this page
+    // renders dates as 'DD Mon YYYY' (e.g. '09 Jul 2026'), not ISO —
+    // convert before comparing, a plain slice(0,10) against an ISO
+    // checkinDate silently matched nothing for every single booking.
+    const start = _apartmenteryCalendarDateToIso_(m[2]);
     const url = m[3];
     if (title.indexOf(guestName) !== -1) {
       const idMatch = url.match(/\/booking\/(\d+)/);
