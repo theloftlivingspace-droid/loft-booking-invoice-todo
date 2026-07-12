@@ -1013,8 +1013,81 @@ function ciDates_(ci) {
 function setBookingDone(resId, done) {
   const map = getProp_(PROP_KEY_BOOKING_DONE);
   if (done) map[resId] = true; else delete map[resId];
-  setProp_(PROP_KEY_BOOKING_DONE, map);
+  safeSetBookingDoneMap_(map);
   return true;
+}
+
+/**
+ * booking_done_v1 is a single Script Properties value (9KB limit) that has
+ * accumulated every resId ever marked done since the automation started,
+ * with nothing ever pruned. Once it gets close to 9KB, setProperty() throws
+ * and setBookingDone() was failing silently — the apartmentery booking gets
+ * created (bookingId written to the sheet) but the row never gets marked
+ * done, and it stays stuck forever because autoCreateApartmenteryBookings()
+ * skips any resId that already has a bookingId before it would ever retry
+ * setBookingDone(). Root-caused 2026-07-12 via the ABB-zhgggtr-20260712 row.
+ *
+ * Fix: if the write fails, prune the oldest entries (by the trailing
+ * YYYYMMDD in the resId, when present) until it fits, then retry once.
+ */
+function safeSetBookingDoneMap_(map) {
+  try {
+    setProp_(PROP_KEY_BOOKING_DONE, map);
+  } catch (err) {
+    Logger.log(`safeSetBookingDoneMap_: setProp_ failed (${err.message}) — pruning booking_done_v1 and retrying`);
+    pruneBookingDoneMap_(map);
+    setProp_(PROP_KEY_BOOKING_DONE, map);
+  }
+}
+
+function pruneBookingDoneMap_(map) {
+  const SAFE_BYTES = 8000; // headroom under the ~9216 byte Script Properties limit
+  const dated = Object.keys(map).map(key => {
+    const m = key.match(/(\d{8})$/); // resIds mostly end in a YYYYMMDD date
+    return { key: key, date: m ? m[1] : '00000000' }; // undated keys pruned first
+  });
+  dated.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0); // oldest first
+  let removed = 0;
+  let i = 0;
+  while (Utilities.newBlob(JSON.stringify(map)).getBytes().length > SAFE_BYTES && i < dated.length) {
+    delete map[dated[i].key];
+    removed++;
+    i++;
+  }
+  Logger.log(`pruneBookingDoneMap_: removed ${removed} old entries from booking_done_v1`);
+}
+
+/**
+ * Repair tool for rows already stuck by the bug above: any resId that has
+ * an apartmentery bookingId written to Sheet1 (booking was actually created)
+ * but is missing from booking_done_v1 (the done-write silently failed) gets
+ * marked done now. Safe to re-run any time — run once from the Apps Script
+ * editor after this deploy to fix already-stuck rows like ABB-zhgggtr-20260712.
+ */
+function repairStuckDoneFlags_() {
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
+  if (!src) { Logger.log('repairStuckDoneFlags_: Sheet1 not found'); return; }
+  const data = src.getDataRange().getValues();
+  const header = data[0];
+  const idx = indexMap_(header, ['ResId', APARTMENTERY_BOOKING_ID_COL_HEADER]);
+  if (idx.ResId < 0 || idx[APARTMENTERY_BOOKING_ID_COL_HEADER] < 0) {
+    Logger.log('repairStuckDoneFlags_: required columns not found');
+    return;
+  }
+  const doneMap = getProp_(PROP_KEY_BOOKING_DONE);
+  let fixed = 0;
+  for (let i = 1; i < data.length; i++) {
+    const resId = String(data[i][idx.ResId] || '').trim();
+    const bookingId = String(data[i][idx[APARTMENTERY_BOOKING_ID_COL_HEADER]] || '').trim();
+    if (resId && bookingId && !doneMap[resId]) {
+      doneMap[resId] = true;
+      fixed++;
+      Logger.log(`repairStuckDoneFlags_: marking ${resId} done (has apartmentery bookingId ${bookingId})`);
+    }
+  }
+  if (fixed > 0) safeSetBookingDoneMap_(doneMap);
+  Logger.log(`repairStuckDoneFlags_: fixed ${fixed} stuck row(s)`);
 }
 
 function setInvoiceDone(invoiceKey, done) {
