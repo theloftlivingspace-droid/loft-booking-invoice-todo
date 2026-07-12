@@ -442,10 +442,17 @@ function backfillMissingApartmenteryBookings() {
       if (err.isCollision) {
         // Already exists in apartmentery (created manually pre-automation) —
         // recover its bookingId from the unit's calendar instead of erroring.
-        const guestNameWithChannel = b.channel ? `${b.guest} / ${b.channel}` : b.guest;
+        // NOTE: search by the RAW guest name, not guestNameWithChannel — a
+        // manually-entered booking's title in apartmentery almost certainly
+        // doesn't have our "/ Airbnb" / "/ Booking" suffix appended, so
+        // searching for the suffixed string found zero matches on the first
+        // attempt (confirmed 2026-07-12: 0/122 recovered) even though the
+        // bookings clearly exist (that's what caused the collision at all).
+        // title.indexOf(guestName) is a substring match, so the raw name
+        // still matches titles that DO have a suffix too — strictly safer.
         let recoveredId = null;
         try {
-          recoveredId = findApartmenteryBookingIdForRoomByGuest_(b.room, guestNameWithChannel, b.checkin);
+          recoveredId = findApartmenteryBookingIdForRoomByGuest_(b.room, b.guest, b.checkin);
         } catch (lookupErr) {
           if (isApartmenterySessionExpiredError(lookupErr)) {
             Logger.log(`SESSION EXPIRED while recovering bookingId for ${b.resId} (${b.room}): ${lookupErr.message}`);
