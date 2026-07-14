@@ -608,7 +608,56 @@ function getDashboardData() {
     today: todayStr,
     booking: getBookingToAdd_(ss, todayStr),
     invoice: getInvoiceToCreate_(ss, todayStr),
+    pendingMatch: getPendingMatchPayouts_(ss),
   };
+}
+
+/* ============================================================
+ *  Pending-match payouts — bank/OTA amounts already received but
+ *  not yet reconciled to a booking (status not in
+ *  PAYOUT_STATUSES_FOR_INVOICE and not marked ✅). Previously these
+ *  only appeared in the Bank_Ledger sheet tab, invisible from the
+ *  admin dashboard — money could arrive and go unnoticed unless the
+ *  sheet was opened directly.
+ * ============================================================ */
+function getPendingMatchPayouts_(ss) {
+  const src = ss.getSheetByName(SRC_PAYOUT_SHEET);
+  if (!src) throw new Error('ไม่พบชีต: ' + SRC_PAYOUT_SHEET);
+
+  const data = src.getDataRange().getValues();
+  const header = data[0];
+  const rows = data.slice(1).filter(r => r.join('').trim() !== '');
+
+  const idx = indexMap_(header, [
+    'วันที่ตรวจพบ', 'OTA', 'Booking ID', 'Conf. Code', 'ชื่อแขก', 'ห้อง',
+    'เช็คอิน', 'เช็คเอาท์', 'ยอดรวม (THB)', 'NET (THB)', 'สถานะ', 'หมายเหตุ',
+  ]);
+
+  const out = rows.filter(r => {
+    const ota    = String(r[idx.OTA] || '').trim();
+    const notes  = String(r[idx.หมายเหตุ] || '').trim();
+    const status = String(r[idx.สถานะ] || '').trim();
+    const bid    = String(r[idx['Booking ID']] || '').trim();
+    if (!ota) return false;
+    if (/^\d/.test(ota) || bid === 'THB') return false;   // summary/footer rows
+    if (notes.startsWith('↳')) return false;               // matched sub-rows
+    if (status.startsWith('✅')) return false;              // already matched
+    if (PAYOUT_STATUSES_FOR_INVOICE.includes(status)) return false; // already matched
+    return true;
+  }).map(r => ({
+    ota: String(r[idx.OTA] || ''),
+    guest: String(r[idx.ชื่อแขก] || ''),
+    room: String(r[idx.ห้อง] || ''),
+    detectedDate: formatCellDate_(r[idx['วันที่ตรวจพบ']]),
+    checkin: formatCellDate_(r[idx.เช็คอิน]),
+    checkout: formatCellDate_(r[idx.เช็คเอาท์]),
+    net: r[idx['NET (THB)']] || r[idx['ยอดรวม (THB)']] || '',
+    status: String(r[idx.สถานะ] || '') || 'รอ match',
+    note: String(r[idx.หมายเหตุ] || ''),
+  }));
+
+  out.sort((a, b) => (a.detectedDate < b.detectedDate ? 1 : -1));
+  return out;
 }
 
 function getBookingToAdd_(ss, todayStr) {
