@@ -158,10 +158,49 @@ function setApartmenteryBookingId_(resId, apartmenteryBookingId) {
  * runApartmenteryAutomation() rather than a trigger directly, so both
  * phases share one run and one session-expiry stop.
  */
+/**
+ * Self-heal pass: booking_done_v1 (this automation's "already created in
+ * apartmentery" flag) is the SAME Script Properties value the-loft-admin
+ * dashboard's manual todo checkbox writes to via doGet_'s setBookingDone
+ * action (Code.gs). Ticking that checkbox for an unrelated reason — or any
+ * other bug that marks a resId done before it actually has a bookingId —
+ * permanently hides that row from autoCreateApartmenteryBookings, since the
+ * `if (b.done) continue` skip happens before anything checks whether an
+ * apartmentery bookingId actually exists. Confirmed 2026-07-16: 9 rows
+ * (Natphatsorn wongwai / EXP-natphatsorn-20260711 among them) were stuck
+ * exactly this way — done=true, bookingId column empty — which is also why
+ * the invoice-matching phase later cross-matched Natphatsorn's payout to a
+ * different guest's booking in the same room (see the guest-name guard in
+ * autoCreateApartmenteryInvoicesAndReceipts).
+ *
+ * Un-mark any non-cancelled row that's done but has no bookingId, so the
+ * normal creation loop below picks it back up this run. Safe to call every
+ * run: a correctly-done row always has a bookingId and is untouched.
+ */
+function unstickBookingDoneWithoutId_(items) {
+  let count = 0;
+  items.forEach(b => {
+    if (!b.done) return;
+    if (/ยกเลิก|cancel/i.test(b.room)) return; // cancelled stays never need one — leave as-is
+    if (getApartmenteryBookingId_(b.resId)) return; // correctly done
+    Logger.log(`unstickBookingDoneWithoutId_: ${b.resId} (${b.room}) was marked done with no ` +
+      `apartmentery bookingId — un-marking so it gets retried this run.`);
+    setBookingDone(b.resId, false);
+    b.done = false; // so the loop below picks it up in this same pass, not just next run
+    count++;
+  });
+  if (count > 0) {
+    Logger.log(`unstickBookingDoneWithoutId_: un-stuck ${count} row(s).`);
+  }
+  return count;
+}
+
 function autoCreateApartmenteryBookings() {
   const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
   const todayStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
   const items = getBookingToAdd_(ss, todayStr);
+
+  unstickBookingDoneWithoutId_(items);
 
   Logger.log(`autoCreateApartmenteryBookings: ${items.length} total rows from getBookingToAdd_ — ` +
     JSON.stringify(items.map(b => ({ resId: b.resId, room: b.room, guest: b.guest, done: b.done }))));
@@ -318,14 +357,14 @@ function autoCreateApartmenteryInvoicesAndReceipts() {
   const bookingItems = getBookingToAdd_(ss, todayStr);
   const invoiceItems = getInvoiceToCreate_(ss, todayStr);
 
-  // Build matchKey -> resId index from booking items (only ones that
-  // actually have an apartmentery bookingId already — no point matching
-  // to a booking apartmentery doesn't know about yet).
+  // Build matchKey -> {resId, guest} index from booking items (only ones
+  // that actually have an apartmentery bookingId already — no point
+  // matching to a booking apartmentery doesn't know about yet).
   const keyToResId = {};
   bookingItems.forEach(b => {
     const aptId = getApartmenteryBookingId_(b.resId);
     if (!aptId) return;
-    (b.matchKeys || []).forEach(k => { if (!keyToResId[k]) keyToResId[k] = b.resId; });
+    (b.matchKeys || []).forEach(k => { if (!keyToResId[k]) keyToResId[k] = { resId: b.resId, guest: b.guest }; });
   });
 
   const result = { created: 0, skipped: 0, sessionExpired: false, errors: [] };
@@ -336,7 +375,25 @@ function autoCreateApartmenteryInvoicesAndReceipts() {
 
     let resId = null;
     for (const k of (inv.matchKeys || [])) {
-      if (keyToResId[k]) { resId = keyToResId[k]; break; }
+      const candidate = keyToResId[k];
+      if (!candidate) continue;
+      // The 'cr:' key only encodes room + a ±4-day window around checkin —
+      // no guest name at all. Two different guests' stays in the same room
+      // only ~6 days apart can both fall inside each other's window (e.g.
+      // one checks out 07-15, the next checks in 07-17), so a bare 'cr:'
+      // hit can point at a completely different person's booking. Confirmed
+      // 2026-07-16: Natphatsorn wongwai's payout (room 300, checkin 07-11)
+      // resolved to Livio Castelli's booking 321720 (room 300, checkin
+      // 07-17) this way, because Natphatsorn's own resId had no bookingId
+      // yet and so wasn't in this index under her own name key. Guard
+      // against this by requiring the candidate's guest name to actually
+      // resemble the invoice item's guest before accepting the match.
+      if (!_namesMatchIgnoringOrder_(inv.guest, candidate.guest) &&
+          !_namesMatchIgnoringOrder_(candidate.guest, inv.guest)) {
+        continue;
+      }
+      resId = candidate.resId;
+      break;
     }
     if (!resId) { result.skipped++; continue; } // no linked apartmentery booking yet
 
