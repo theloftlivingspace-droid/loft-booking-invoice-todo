@@ -748,6 +748,36 @@ function createApartmenteryInvoice(branchId, unitId, bookingId, rentalPrice, dat
   Logger.log('createApartmenteryInvoice FAILED — response code ' + code + ', extracted error: ' +
     _extractPlayErrorMessage_(response.getContentText()));
 
+  // Diagnostic only, best-effort: if invoice/add rejects the branch/unit/
+  // booking combo, check whether the *same* combo's booking-edit page loads
+  // fine. If it does, the problem is specific to the invoice/add route (e.g.
+  // booking status, an existing invoice already on this booking) rather than
+  // branchId/unitId/bookingId being genuinely wrong for each other. If the
+  // edit page ALSO fails the same way, the booking really doesn't belong to
+  // this branch/unit — most likely stale bookingId or the room was
+  // reassigned after this booking was created in apartmentery.
+  try {
+    const editPath = `/user/branch/${branchId}/unit/${unitId}/booking/${bookingId}/edit`;
+    const editResponse = _apartmenteryFetch_(editPath, { method: 'get' });
+    const editCode = editResponse.getResponseCode();
+    if (editCode === 200) {
+      Logger.log(`createApartmenteryInvoice DIAGNOSTIC — booking ${bookingId} edit page loads fine ` +
+        `(HTTP 200) under branchId=${branchId} unitId=${unitId}. So the branch/unit/booking combo IS ` +
+        `valid — the invoice/add rejection is specific to that route (check for an existing invoice ` +
+        `already on this booking, or a booking status issue).`);
+    } else {
+      Logger.log(`createApartmenteryInvoice DIAGNOSTIC — booking ${bookingId} edit page ALSO failed ` +
+        `(HTTP ${editCode}) under branchId=${branchId} unitId=${unitId}: ` +
+        _extractPlayErrorMessage_(editResponse.getContentText()) +
+        ` — this branch/unit/booking combo looks genuinely wrong (stale bookingId, or the booking's ` +
+        `room was reassigned after it was created in apartmentery).`);
+    }
+  } catch (diagErr) {
+    if (!isApartmenterySessionExpiredError(diagErr)) {
+      Logger.log(`createApartmenteryInvoice DIAGNOSTIC — edit-page check itself failed: ${diagErr.message}`);
+    }
+  }
+
   throw new Error(
     `Invoice creation for booking ${bookingId} did not redirect as expected ` +
     `(HTTP ${code}). Response may indicate a validation error — inspect manually.`
