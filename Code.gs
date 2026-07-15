@@ -1149,8 +1149,72 @@ function repairStuckDoneFlags_() {
 function setInvoiceDone(invoiceKey, done) {
   const map = getProp_(PROP_KEY_INVOICE_DONE);
   if (done) map[invoiceKey] = true; else delete map[invoiceKey];
-  setProp_(PROP_KEY_INVOICE_DONE, map);
+  safeSetInvoiceDoneMap_(map);
   return true;
+}
+
+/**
+ * invoice_done_v1 is subject to the exact same 9KB Script Properties limit
+ * as booking_done_v1 (see safeSetBookingDoneMap_ above), but this map is
+ * written from inside autoCreateApartmenteryInvoicesAndReceipts() AFTER
+ * processPayoutToReceiptForRoom() has already created the real invoice +
+ * receipt in Apartmentery. If setProp_ throws here, the exception is caught
+ * by the outer try/catch as a generic error — the invoiceKey never gets
+ * marked done, so the next automation run will see it as still pending and
+ * call processPayoutToReceiptForRoom() again, creating a DUPLICATE invoice.
+ * This is worse than the booking_done_v1 case (which only stalls the
+ * checkbox) — added 2026-07-15 after room 204 / Eaint Phoo Htet (booking
+ * 326414) was found stuck in "ค้างสร้าง invoice".
+ */
+function safeSetInvoiceDoneMap_(map) {
+  try {
+    setProp_(PROP_KEY_INVOICE_DONE, map);
+  } catch (err) {
+    Logger.log(`safeSetInvoiceDoneMap_: setProp_ failed (${err.message}) — pruning invoice_done_v1 and retrying`);
+    pruneInvoiceDoneMap_(map);
+    setProp_(PROP_KEY_INVOICE_DONE, map);
+  }
+}
+
+function pruneInvoiceDoneMap_(map) {
+  const SAFE_BYTES = 8000; // headroom under the ~9216 byte Script Properties limit
+  const dated = Object.keys(map).map(key => {
+    // invoiceKey is usually a bare apartmentery bookingId (numeric) or
+    // "bookingId#confCode(#n)" for split multi-guest payouts — neither
+    // carries a reliable date, so fall back to numeric bookingId order
+    // (older Apartmentery bookingIds are numerically smaller) as a proxy
+    // for "oldest first", same intent as pruneBookingDoneMap_'s date sort.
+    const bidPart = String(key).split('#')[0];
+    const n = parseInt(bidPart, 10);
+    return { key: key, sortKey: isNaN(n) ? 0 : n };
+  });
+  dated.sort((a, b) => a.sortKey - b.sortKey);
+  let removed = 0;
+  let i = 0;
+  while (Utilities.newBlob(JSON.stringify(map)).getBytes().length > SAFE_BYTES && i < dated.length) {
+    delete map[dated[i].key];
+    removed++;
+    i++;
+  }
+  Logger.log(`pruneInvoiceDoneMap_: removed ${removed} old entries from invoice_done_v1`);
+}
+
+/**
+ * Repair tool mirroring runRepairStuckDoneFlags(), for invoice_done_v1.
+ * Marks any invoiceKey done if a real invoice already exists for it in
+ * Apartmentery (avoids re-marking things that were never actually created).
+ * Run this manually once from the Apps Script editor if invoices are
+ * suspected stuck due to the bug above — check Apartmentery directly first
+ * to confirm which bookingIds already have an invoice before running.
+ */
+function runRepairStuckInvoiceDoneFlags(knownCreatedInvoiceKeys) {
+  const doneMap = getProp_(PROP_KEY_INVOICE_DONE);
+  let fixed = 0;
+  (knownCreatedInvoiceKeys || []).forEach(key => {
+    if (!doneMap[key]) { doneMap[key] = true; fixed++; }
+  });
+  if (fixed > 0) safeSetInvoiceDoneMap_(doneMap);
+  Logger.log(`runRepairStuckInvoiceDoneFlags: fixed ${fixed} stuck invoice key(s)`);
 }
 
 function setBookingNote(resId, note) {
