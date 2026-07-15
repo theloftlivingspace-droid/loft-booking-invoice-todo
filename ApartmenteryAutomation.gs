@@ -257,8 +257,45 @@ function autoCreateApartmenteryBookings() {
         result.sessionExpired = true;
         break; // stop the whole run — see file header
       }
+
+      if (err.isCollision) {
+        // Already exists in apartmentery (created manually, or by a prior
+        // run that errored after the create but before setApartmenteryBookingId_
+        // was recorded) — recover its bookingId from the unit's calendar
+        // instead of leaving this booking stuck forever on every hourly run.
+        // Ported from backfillMissingApartmenteryBookings() — search by the
+        // RAW guest name, not guestNameWithChannel, since a manually-entered
+        // booking's title in apartmentery almost certainly doesn't have our
+        // "/ Airbnb" / "/ Booking" suffix appended.
+        let recoveredId = null;
+        try {
+          recoveredId = findApartmenteryBookingIdForRoomByGuest_(b.room, b.guest, b.checkin);
+        } catch (lookupErr) {
+          if (isApartmenterySessionExpiredError(lookupErr)) {
+            Logger.log(`SESSION EXPIRED while recovering bookingId for ${b.resId} (${b.room}): ${lookupErr.message}`);
+            result.sessionExpired = true;
+            break;
+          }
+          Logger.log(`recovery lookup failed for ${b.resId} (${b.room}): ${lookupErr.message}`);
+        }
+
+        if (recoveredId) {
+          setApartmenteryBookingId_(b.resId, recoveredId);
+          setBookingDone(b.resId, true);
+          Logger.log(`recovered ${b.resId} (${b.room}) -> existing apartmentery bookingId ${recoveredId} (was already in apartmentery, not newly created)`);
+          result.created++; // counts toward "now has a bookingId", same outcome for the sheet
+          result.recovered = (result.recovered || 0) + 1;
+          continue;
+        }
+
+        Logger.log(`skip ${b.resId} (${b.room}): collision reported but no exact guest+date match found in unit's calendar — inspect manually. (${err.apartmenteryError})`);
+        result.skipped++;
+        result.errors.push({ resId: b.resId, guest: b.guest, room: b.room, error: `collision, but couldn't recover bookingId — ${err.apartmenteryError}` });
+        continue;
+      }
+
       Logger.log(`ERROR creating booking for ${b.resId} (${b.room}): ${err.message}`);
-      result.errors.push({ resId: b.resId, guest: b.guest, room: b.room, error: err.message });
+      result.errors.push({ resId: b.resId, guest: b.guest, room: b.room, error: err.apartmenteryError || err.message });
       // Non-session errors (e.g. one bad row) don't stop the batch —
       // continue so one problem booking doesn't block everything else.
     }
