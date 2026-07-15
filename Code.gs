@@ -23,6 +23,7 @@ const PAYOUT_STATUSES_FOR_INVOICE = [
   '✅ Matched - Booking.com remittance',
   '✅ Matched - Expedia remittance',
   '✅ Matched - Trip.com settlement',
+  '✅ Matched - Direct/Extranet',
 ];
 
 const PROP_KEY_BOOKING_DONE = 'booking_done_v1';
