@@ -357,7 +357,7 @@ function autoCreateApartmenteryInvoicesAndReceipts() {
         result.sessionExpired = true;
         break;
       }
-      result.errors.push({ invoiceKey: inv.invoiceKey, guest: inv.guest, room: inv.room, error: err.message });
+      result.errors.push({ invoiceKey: inv.invoiceKey, guest: inv.guest, room: inv.room, resId: resId, aptBookingId: aptBookingId, error: err.message });
     }
   }
 

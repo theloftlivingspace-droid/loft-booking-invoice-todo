@@ -743,6 +743,7 @@ function createApartmenteryInvoice(branchId, unitId, bookingId, rentalPrice, dat
       `didn't match expected pattern. Raw Location: "${location}"`);
   }
 
+  Logger.log(`createApartmenteryInvoice FAILED — branchId=${branchId} unitId=${unitId} bookingId=${bookingId} path=${path}`);
   Logger.log('createApartmenteryInvoice FAILED — payload sent: ' + JSON.stringify(payload));
   Logger.log('createApartmenteryInvoice FAILED — response code ' + code + ', extracted error: ' +
     _extractPlayErrorMessage_(response.getContentText()));
