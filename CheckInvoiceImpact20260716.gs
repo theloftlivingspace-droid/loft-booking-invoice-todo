@@ -52,7 +52,10 @@ function checkInvoiceImpact20260716() {
       Logger.log(`${row.resId}: room "${row.room}" not in ROOM_TO_UNIT_ID — skipping.`);
       return;
     }
-    const path = `/user/branch/${unit.branchId}/unit/${unit.unitId}/booking/${row.storedId}`;
+    // Confirmed 2026-07-16: plain .../booking/{id} returns HTTP 400 — the
+    // working GET path for an existing booking's page is .../booking/{id}/edit
+    // (same path _getApartmenteryBookingEditFormState_ already uses).
+    const path = `/user/branch/${unit.branchId}/unit/${unit.unitId}/booking/${row.storedId}/edit`;
     try {
       const response = _apartmenteryFetch_(path, { method: 'get' });
       if (response.getResponseCode() !== 200) {
