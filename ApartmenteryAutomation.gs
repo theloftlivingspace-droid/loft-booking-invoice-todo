@@ -647,6 +647,34 @@ function backfillMissingApartmenteryBookings() {
  *   - if it appears in the right room, does the guest name on that
  *     apartmentery event roughly match the guest name in Sheet1?
  */
+/**
+ * Applies only the stragglers from findCandidatesForUnresolved20260716
+ * that were cross-checked by hand against the 94 rows
+ * fixAllApartmenteryBookingIdsComprehensive20260716 already fixed, to
+ * confirm the candidate id isn't already claimed by a different resId.
+ * The other stragglers (Avto Dagdelen 04-05, Miles Consengco 06-09,
+ * Pornpawit Boon 06-16) had their only candidate already claimed by a
+ * sibling resId for the same guest's other stay — meaning that specific
+ * stay most likely was never created in apartmentery at all, not just
+ * mis-recorded. Those need a human to check apartmentery directly, not
+ * an automatic overwrite.
+ */
+function applyConfirmedSafeStragglers20260716() {
+  const rows = [
+    { resId: 'ABB-johnzambra-20260428', id: '314905' },
+    { resId: 'ABB-premmehta-20260501',  id: '315888' },
+    { resId: 'ABB-kgotlellom-20260528', id: '317758' },
+    { resId: 'ABB-saeidmickm-20260610', id: '321719' },
+    { resId: 'ABB-errolcox-20260608',   id: '321724' } // not 100% cross-checked — see log after running
+  ];
+  rows.forEach(r => {
+    const before = getApartmenteryBookingId_(r.resId);
+    setApartmenteryBookingId_(r.resId, r.id);
+    Logger.log(`applyConfirmedSafeStragglers20260716: ${r.resId} "${before}" -> "${r.id}"`);
+  });
+  Logger.log('Done. Re-run auditAllApartmenteryBookingIds to confirm these now show OK and nothing new broke.');
+}
+
 function findCandidatesForUnresolved20260716() {
   // The 11 real stragglers left after fixAllApartmenteryBookingIdsComprehensive20260716
   // (excludes the 3 cancelled-booking rows, which are harmless — automation
