@@ -647,6 +647,57 @@ function backfillMissingApartmenteryBookings() {
  *   - if it appears in the right room, does the guest name on that
  *     apartmentery event roughly match the guest name in Sheet1?
  */
+function findCandidatesForUnresolved20260716() {
+  // The 11 real stragglers left after fixAllApartmenteryBookingIdsComprehensive20260716
+  // (excludes the 3 cancelled-booking rows, which are harmless — automation
+  // already skips any room containing "ยกเลิก"/"cancel").
+  const rows = [
+    { resId: 'ABB-e585a82c20-20260219', room: '103', guest: '全, 桂珍' },
+    { resId: 'ABB-e5a698e88a-20260403', room: '103', guest: '妘芮 林 Yunjui Lin' },
+    { resId: 'ABB-avtodagdel-20260405', room: '203', guest: 'Avto Dagdelen' },
+    { resId: 'ABB-johnzambra-20260428', room: '108', guest: 'John Zambrana' },
+    { resId: 'ABB-premmehta-20260501',  room: '108', guest: 'Prem Mehta' },
+    { resId: 'ABB-lataviaant-20260512', room: '214', guest: "La'Tavia Antrice" },
+    { resId: 'ABB-kgotlellom-20260528', room: '203', guest: 'Kgotlello Masemola' },
+    { resId: 'ABB-errolcox-20260608',   room: '210', guest: 'Errol Cox' },
+    { resId: 'ABB-milesconse-20260609', room: '204', guest: 'Miles Consengco' },
+    { resId: 'ABB-saeidmickm-20260610', room: '108', guest: 'Saeid Mick Momtahan' },
+    { resId: 'TRP-pornpawitb-20260616', room: '103', guest: 'Pornpawit Boon' }
+  ];
+
+  const roomsNeeded = [...new Set(rows.map(r => r.room))];
+  const calendarByRoom = {};
+  roomsNeeded.forEach(room => {
+    const unit = getApartmenteryUnitForRoom(room);
+    if (!unit) return;
+    const path = `/user/branch/${unit.branchId}/unit/${unit.unitId}/booking`;
+    const response = _apartmenteryFetch_(path, { method: 'get' });
+    const html = response.getContentText();
+    const blockRe = /\{\s*title:\s*'((?:[^'\\]|\\.)*)'[\s\S]*?start:\s*'([^']*)'[\s\S]*?url:\s*'([^']*)'\s*\}/g;
+    let m;
+    const events = [];
+    while ((m = blockRe.exec(html)) !== null) {
+      const idMatch = m[3].match(/\/booking\/(\d+)/);
+      events.push({ title: m[1], start: _apartmenteryCalendarDateToIso_(m[2]), id: idMatch ? idMatch[1] : null });
+    }
+    calendarByRoom[room] = events;
+  });
+
+  rows.forEach(r => {
+    const events = calendarByRoom[r.room] || [];
+    const currentId = getApartmenteryBookingId_(r.resId);
+    // Loose word-overlap match, ignoring date — surfaces every plausible
+    // candidate in that room regardless of which date it's actually on.
+    const candidates = events.filter(e => _namesMatchIgnoringOrder_(r.guest, e.title));
+    Logger.log(`--- ${r.resId} (guest "${r.guest}", room ${r.room}, currently stored: ${currentId}) ---`);
+    if (candidates.length === 0) {
+      Logger.log(`  no name match found anywhere in room ${r.room}'s calendar at all — guest may be in a different room, or spelled very differently on apartmentery.`);
+    } else {
+      candidates.forEach(c => Logger.log(`  candidate: id=${c.id} start=${c.start} title="${c.title}"`));
+    }
+  });
+}
+
 function auditAllApartmenteryBookingIds() {
   Logger.log('auditAllApartmenteryBookingIds: READ-ONLY — pulling calendars for all rooms...');
 
