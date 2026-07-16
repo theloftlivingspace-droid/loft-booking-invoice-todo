@@ -18,8 +18,9 @@
  * existing hourly ApartmenteryAutomation.gs run picks it up and creates
  * the booking on apartmentery.com automatically.
  *
- * SCOPE: only the "Private apartment best location in Bangkok" Airbnb
- * listing (room id 17444947 = our room 363 / Mycondo). Every other
+ * SCOPE: only the two Airbnb listings that are both actually room 363 /
+ * Mycondo — "Private apartment best location in Bangkok" (id 17444947)
+ * and "Cosy apartment downtown Bangkok" (id 18163498). Every other
  * Airbnb listing is ignored here — those already come through Little
  * Hotelier.
  *
@@ -33,7 +34,10 @@
  * -----------------------------------------------------------------------
  */
 
-const AIRBNB_363_LISTING_IDS = ['17444947']; // "Private apartment best location in Bangkok" == room 363 / Mycondo
+const AIRBNB_363_LISTING_IDS = [
+  '17444947', // "Private apartment best location in Bangkok" == room 363 / Mycondo (listing A)
+  '18163498', // "Cosy apartment downtown Bangkok" == room 363 / Mycondo (listing B)
+];
 const AIRBNB_363_ROOM = '363';
 const AIRBNB_363_SEARCH_QUERY = 'from:automated@airbnb.com subject:"Reservation confirmed" newer_than:90d';
 
