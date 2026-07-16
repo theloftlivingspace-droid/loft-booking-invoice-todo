@@ -195,12 +195,40 @@ function unstickBookingDoneWithoutId_(items) {
   return count;
 }
 
+/**
+ * Mirror image of unstickBookingDoneWithoutId_: a row that already HAS an
+ * apartmentery bookingId but is still marked done=false. Confirmed
+ * 2026-07-16 — backfillMissingApartmenteryBookings() (and the collision
+ * recovery path) wrote the bookingId column but never called
+ * setBookingDone(), so 12 rows sat in Booking To Add forever with a
+ * complete bookingId. Auto-tick them here every run so any future path
+ * that sets a bookingId without also marking done self-heals instead of
+ * requiring another manual investigation.
+ */
+function tickBookingDoneWithId_(items) {
+  let count = 0;
+  items.forEach(b => {
+    if (b.done) return;
+    if (!getApartmenteryBookingId_(b.resId)) return;
+    Logger.log(`tickBookingDoneWithId_: ${b.resId} (${b.room}) has an apartmentery bookingId ` +
+      `but was still marked done=false — marking done.`);
+    setBookingDone(b.resId, true);
+    b.done = true;
+    count++;
+  });
+  if (count > 0) {
+    Logger.log(`tickBookingDoneWithId_: ticked ${count} row(s).`);
+  }
+  return count;
+}
+
 function autoCreateApartmenteryBookings() {
   const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
   const todayStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
   const items = getBookingToAdd_(ss, todayStr);
 
   unstickBookingDoneWithoutId_(items);
+  tickBookingDoneWithId_(items);
 
   Logger.log(`autoCreateApartmenteryBookings: ${items.length} total rows from getBookingToAdd_ — ` +
     JSON.stringify(items.map(b => ({ resId: b.resId, room: b.room, guest: b.guest, done: b.done }))));
@@ -523,6 +551,7 @@ function backfillMissingApartmenteryBookings() {
       }
 
       setApartmenteryBookingId_(b.resId, created.bookingId);
+      setBookingDone(b.resId, true);
       Logger.log(`[backfill] created ${b.resId} (${b.room}) -> apartmentery bookingId ${created.bookingId}`);
       result.created++;
 
@@ -558,6 +587,7 @@ function backfillMissingApartmenteryBookings() {
 
         if (recoveredId) {
           setApartmenteryBookingId_(b.resId, recoveredId);
+          setBookingDone(b.resId, true);
           Logger.log(`[backfill] recovered ${b.resId} (${b.room}) -> existing apartmentery bookingId ${recoveredId} (was already in apartmentery, not newly created)`);
           result.created++; // counts toward "now has a bookingId", same outcome for the sheet
           result.recovered = (result.recovered || 0) + 1;
