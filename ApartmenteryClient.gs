@@ -403,15 +403,28 @@ function createApartmenteryBooking(branchId, unitId, opts) {
     // not to the new booking's own URL — there's no ID in the Location
     // header at all. GET that listing page and pull the ID out of its
     // embedded fullCalendar events array by matching on guest name instead.
+    //
+    // Confirmed 2026-07-16: matching by guest name ALONE (the old
+    // _findBookingIdByGuestName_, with no date check) picked up a
+    // DIFFERENT booking's id whenever the same guest/room already had
+    // another stay in the calendar, or another guest's title happened to
+    // contain this guest's name as a substring — "lastMatchId" isn't
+    // guaranteed to be the one just created. This silently wrote a wrong,
+    // already-used bookingId into Sheet1, producing duplicate Apartmentery
+    // Booking ID values across unrelated resIds. Use the same
+    // date-verified matcher the collision-recovery path already relies on
+    // (_findBookingIdByGuestNameAndDate_) so this only ever accepts a
+    // booking whose calendar start date also matches opts.startDate.
     if (/\/booking\/?$/.test(location)) {
       const listingResponse = _apartmenteryFetch_(location, { method: 'get' });
-      const bookingId = _findBookingIdByGuestName_(listingResponse.getContentText(), opts.guestName);
+      const bookingId = _findBookingIdByGuestNameAndDate_(listingResponse.getContentText(), opts.guestName, opts.startDate);
       if (bookingId) {
         return { bookingId: bookingId, location: location };
       }
       Logger.log(`createApartmenteryBooking: redirected to listing page (${location}) but ` +
-        `couldn't find a booking for guest "${opts.guestName}" in its calendar events — ` +
-        `it may have been created under a slightly different title. Check apartmentery manually.`);
+        `couldn't find a booking for guest "${opts.guestName}" starting "${opts.startDate}" in its ` +
+        `calendar events — it may have been created under a slightly different title, or the ` +
+        `calendar page hasn't caught up yet. Check apartmentery manually.`);
     }
 
     Logger.log(`createApartmenteryBooking: got redirect (HTTP ${code}) but Location header ` +
