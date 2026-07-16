@@ -749,6 +749,8 @@ function auditAllApartmenteryBookingIds() {
 
   return { okCount, wrongRoomCount, deadCount, guestMismatchCount };
 }
+
+function debugApartmenteryUnitCalendar205() {
   return debugApartmenteryUnitCalendar('205 Allure');
 }
 function debugApartmenteryUnitCalendar204() {
