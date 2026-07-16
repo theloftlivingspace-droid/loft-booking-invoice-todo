@@ -623,7 +623,132 @@ function backfillMissingApartmenteryBookings() {
  *   debugApartmenteryUnitCalendar('205 Allure')
  */
 /** No-argument wrapper for the Run button — GAS's editor can't pass parameters. */
-function debugApartmenteryUnitCalendar205() {
+/**
+ * READ-ONLY. Confirmed 2026-07-16: Nathan reported apartmentery bookings
+ * looking room-mismatched shortly after a manual runApartmenteryAutomation()
+ * run. That run's invoice phase errored cleanly for one stale bookingId
+ * (Andrea Mastropietro / 326665 — apartmentery rejected it outright), but
+ * a bookingId that's stale WITHOUT being outright invalid — i.e. it still
+ * resolves, just to a *different* booking than the one on this row — would
+ * NOT have errored. It would have silently created an invoice against
+ * whatever booking that ID now points to. This function does not write
+ * anything anywhere; it only reports. Do not "fix" anything based on its
+ * output without Nathan reviewing first, since apartmentery itself may
+ * already be wrong for reasons upstream of this sheet.
+ *
+ * For every room, pulls the full apartmentery calendar (bookingId -> title
+ * + start date). For every Sheet1 row with a recorded Apartmentery Booking
+ * ID, checks:
+ *   - does that ID appear under its OWN room's calendar? (expected)
+ *   - does it appear under a DIFFERENT room's calendar instead? (the
+ *     "ห้องมั่ว" case — flagged loudly)
+ *   - does it not appear in ANY room's calendar at all? (dead ID, same
+ *     class of problem as Andrea's, just not yet hit by the invoice phase)
+ *   - if it appears in the right room, does the guest name on that
+ *     apartmentery event roughly match the guest name in Sheet1?
+ */
+function auditAllApartmenteryBookingIds() {
+  Logger.log('auditAllApartmenteryBookingIds: READ-ONLY — pulling calendars for all rooms...');
+
+  // Step 1: pull every room's calendar, build bookingId -> {room, title, start}
+  const byBookingId = {};
+  const roomEventCounts = {};
+  Object.keys(ROOM_TO_UNIT_ID).forEach(room => {
+    const unit = getApartmenteryUnitForRoom(room);
+    if (!unit) return;
+    const path = `/user/branch/${unit.branchId}/unit/${unit.unitId}/booking`;
+    let html;
+    try {
+      const response = _apartmenteryFetch_(path, { method: 'get' });
+      html = response.getContentText();
+    } catch (e) {
+      Logger.log(`auditAllApartmenteryBookingIds: FAILED to fetch calendar for room ${room}: ${e.message}`);
+      return;
+    }
+    const blockRe = /\{\s*title:\s*'((?:[^'\\]|\\.)*)'[\s\S]*?start:\s*'([^']*)'[\s\S]*?url:\s*'([^']*)'\s*\}/g;
+    let m;
+    let count = 0;
+    while ((m = blockRe.exec(html)) !== null) {
+      const title = m[1];
+      const start = _apartmenteryCalendarDateToIso_(m[2]);
+      const idMatch = m[3].match(/\/booking\/(\d+)/);
+      if (!idMatch) continue;
+      const bookingId = idMatch[1];
+      count++;
+      // A bookingId can legitimately appear more than once per room's page
+      // (e.g. rendered on multiple months) — keep the first, they should
+      // be identical anyway.
+      if (!byBookingId[bookingId]) {
+        byBookingId[bookingId] = { room: room, title: title, start: start };
+      }
+    }
+    roomEventCounts[room] = count;
+    Logger.log(`auditAllApartmenteryBookingIds: room ${room} (unit ${unit.unitId}) — ${count} calendar events`);
+  });
+  Logger.log(`auditAllApartmenteryBookingIds: pulled ${Object.keys(byBookingId).length} unique bookingIds across all rooms.`);
+
+  // Step 2: walk every Sheet1 row with a recorded bookingId and cross-check.
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const src = ss.getSheetByName('Sheet1');
+  const data = src.getDataRange().getValues();
+  const header = data[0];
+  const idx = indexMap_(header, ['ResId', 'เลขห้อง', 'ชื่อแขก', APARTMENTERY_BOOKING_ID_COL_HEADER]);
+  if (idx.ResId < 0 || idx[APARTMENTERY_BOOKING_ID_COL_HEADER] < 0) {
+    Logger.log('auditAllApartmenteryBookingIds: required columns not found — aborting.');
+    return;
+  }
+
+  let okCount = 0, wrongRoomCount = 0, deadCount = 0, guestMismatchCount = 0;
+  const wrongRoom = [], dead = [], guestMismatch = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const resId = String(data[i][idx.ResId] || '').trim();
+    const bookingId = String(data[i][idx[APARTMENTERY_BOOKING_ID_COL_HEADER]] || '').trim();
+    if (!resId || !bookingId) continue;
+    const roomRaw = idx['เลขห้อง'] >= 0 ? String(data[i][idx['เลขห้อง']] || '').trim() : '';
+    const guest = idx['ชื่อแขก'] >= 0 ? String(data[i][idx['ชื่อแขก']] || '').trim() : '';
+    const expectedRoom = (roomRaw.match(/^\d+/) || [''])[0];
+
+    const found = byBookingId[bookingId];
+    if (!found) {
+      deadCount++;
+      dead.push(`resId=${resId} room=${roomRaw} guest="${guest}" bookingId=${bookingId} — NOT FOUND in any room's calendar`);
+      continue;
+    }
+    if (found.room !== expectedRoom) {
+      wrongRoomCount++;
+      wrongRoom.push(`resId=${resId} guest="${guest}" bookingId=${bookingId} — Sheet1 says room ${expectedRoom}, but apartmentery has this bookingId under room ${found.room} as "${found.title}" (${found.start})`);
+      continue;
+    }
+    if (guest && !_namesMatchIgnoringOrder_(guest, found.title)) {
+      guestMismatchCount++;
+      guestMismatch.push(`resId=${resId} room=${expectedRoom} bookingId=${bookingId} — Sheet1 guest "${guest}" vs apartmentery title "${found.title}"`);
+      continue;
+    }
+    okCount++;
+  }
+
+  Logger.log('=== auditAllApartmenteryBookingIds SUMMARY ===');
+  Logger.log(`OK: ${okCount}`);
+  Logger.log(`WRONG ROOM (bookingId lives under a different room than Sheet1 expects): ${wrongRoomCount}`);
+  Logger.log(`DEAD (bookingId not found in any room's calendar): ${deadCount}`);
+  Logger.log(`GUEST NAME MISMATCH (right room, but guest name doesn't match): ${guestMismatchCount}`);
+
+  if (wrongRoom.length) {
+    Logger.log('--- WRONG ROOM DETAIL ---');
+    wrongRoom.forEach(l => Logger.log(l));
+  }
+  if (dead.length) {
+    Logger.log('--- DEAD DETAIL ---');
+    dead.forEach(l => Logger.log(l));
+  }
+  if (guestMismatch.length) {
+    Logger.log('--- GUEST MISMATCH DETAIL ---');
+    guestMismatch.forEach(l => Logger.log(l));
+  }
+
+  return { okCount, wrongRoomCount, deadCount, guestMismatchCount };
+}
   return debugApartmenteryUnitCalendar('205 Allure');
 }
 function debugApartmenteryUnitCalendar204() {
