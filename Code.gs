@@ -1261,13 +1261,46 @@ function cancelBooking_(resId) {
         src.getRange(i + 1, idx['เช็คเอาท์'] + 1).setValue(todayBKK);
       }
       triggerStyleSheet1_();
+      var guest     = String(data[i][idx['ชื่อแขก']] || '').trim();
+      var checkin   = idx['เช็คอิน']  >= 0 ? String(data[i][idx['เช็คอิน']]  || '').trim() : '';
+
+      // ปรับ end date ใน Apartmentery ให้ตรงกับ Sheet1 ด้วย (pattern เดียวกับ
+      // updateCheckoutDate_) — ถ้ายังไม่มี bookingId ให้ลอง backfill จาก
+      // guest name + checkin date ก่อน แล้วค่อยยิง update
+      var apartmenterySynced = false, apartmenteryNote = '';
+      try {
+        var aptId = getApartmenteryBookingId_(resId);
+        if (!aptId) {
+          var foundId = findApartmenteryBookingIdForRoomByGuest_(currentRoom, guest, checkin);
+          if (foundId) {
+            aptId = foundId;
+            setApartmenteryBookingId_(resId, foundId);
+          }
+        }
+        if (aptId) {
+          var r = updateApartmenteryBookingEndDateForRoom(currentRoom, aptId, todayBKK);
+          if (r && r.skipped) {
+            apartmenteryNote = r.reason;
+          } else {
+            apartmenterySynced = true;
+          }
+        } else {
+          apartmenteryNote = 'no apartmentery bookingId yet — nothing to sync';
+        }
+      } catch (e) {
+        if (isApartmenterySessionExpiredError(e)) {
+          apartmenteryNote = 'Apartmentery session expired — update the date there manually';
+        } else {
+          apartmenteryNote = 'Apartmentery sync failed: ' + e;
+        }
+        Logger.log('cancelBooking_ apartmentery sync error: ' + e);
+      }
+
       // แจ้งกลุ่มแม่บ้านผ่าน LINE bot
       try {
         var props     = PropertiesService.getScriptProperties();
         var botUrl    = props.getProperty('BOT_URL')   || 'https://hotel-line-bot.onrender.com';
         var adminTok  = props.getProperty('ADMIN_TOKEN') || 'apt2025@secret';
-        var guest     = String(data[i][idx['ชื่อแขก']] || '').trim();
-        var checkin   = idx['เช็คอิน']  >= 0 ? String(data[i][idx['เช็คอิน']]  || '').trim() : '';
         UrlFetchApp.fetch(botUrl + '/api/cancel-notify', {
           method: 'post',
           contentType: 'application/json',
@@ -1276,7 +1309,10 @@ function cancelBooking_(resId) {
           muteHttpExceptions: true
         });
       } catch(e) { Logger.log('LINE notify error: ' + e); }
-      return { ok: true, room: newRoom, checkoutUpdated: todayBKK };
+      return {
+        ok: true, room: newRoom, checkoutUpdated: todayBKK,
+        apartmenterySynced: apartmenterySynced, apartmenteryNote: apartmenteryNote
+      };
     }
   }
   return { ok: false, error: 'resId not found: ' + resId };
