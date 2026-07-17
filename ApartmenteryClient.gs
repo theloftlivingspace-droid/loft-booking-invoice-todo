@@ -296,7 +296,15 @@ function _extractCustomerOptions_(html) {
  * silently attaches a booking to the wrong person's customer record.
  */
 function _findExistingApartmenteryCustomerId_(html, guestName) {
-  const target = _normalizeGuestNameForMatch_(guestName);
+  // guestName arrives as "Name / Channel" (e.g. "Syeed Ryan / Airbnb") from
+  // every automated caller, but each dropdown option's label is stripped of
+  // its " / Channel" suffix by _customerOptionCoreName_ before comparison.
+  // Without stripping it here too, the target never matches any option —
+  // confirmed 2026-07-17: this silently broke existing-customer matching
+  // for every repeat guest, not just same-day back-to-back bookings, since
+  // "new" customerType submissions were always sent as "existing customer
+  // not found" even when the guest's record clearly existed.
+  const target = _normalizeGuestNameForMatch_(_customerOptionCoreName_(guestName));
   if (!target) return { status: 'none' };
   const matchIds = new Set();
   _extractCustomerOptions_(html).forEach(opt => {
