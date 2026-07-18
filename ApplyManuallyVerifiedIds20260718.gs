@@ -3,7 +3,18 @@
  * -----------------------------------------------------------------------
  * Nathan checked apartmentery directly for the remaining unresolved rows
  * from the 2026-07-18 audit and confirmed:
- *   - Miles Consengco (ABB-milesconse-20260609): correct id is 322992
+ *   - Miles Consengco has exactly 2 real bookings on apartmentery:
+ *     https://apartmentery.com/.../booking/321078 and .../booking/322992.
+ *     322992 (start 2026-06-21) was already correctly stored against
+ *     ABB-milesconse-20260621 (his other, later stay) — untouched. That
+ *     leaves 321078 as the only remaining candidate for
+ *     ABB-milesconse-20260609 (his 06-09 stay), even though its
+ *     apartmentery start date (2026-06-03) doesn't exactly match Sheet1's
+ *     checkin — since apartmentery confirms only 2 Miles Consengco
+ *     bookings exist total and the other one is already spoken for, this
+ *     has to be it. (321078 is also the id that used to be wrongly stored
+ *     against Errol Cox before the 2026-07-18 fix — freed once that was
+ *     corrected.)
  *   - THANAPORNPAN BUKBOON (TRP-thanapornp-20260616): correct id is 321937
  *   - 妘芮 林 Yunjui Lin (ABB-e5a698e88a-20260403): 312166 was already
  *     correct — the earlier "guest name mismatch" was a false positive
@@ -31,7 +42,7 @@
  */
 
 const MANUALLY_VERIFIED_20260718_ = [
-  { resId: 'ABB-milesconse-20260609', guest: 'Miles Consengco', to: '322992' },
+  { resId: 'ABB-milesconse-20260609', guest: 'Miles Consengco', to: '321078' },
   { resId: 'TRP-thanapornp-20260616', guest: 'THANAPORNPAN BUKBOON', to: '321937' }
 ];
 
