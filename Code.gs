@@ -643,6 +643,7 @@ function getPendingMatchPayouts_(ss) {
     if (/^\d/.test(ota) || bid === 'THB') return false;   // summary/footer rows
     if (notes.startsWith('↳')) return false;               // matched sub-rows
     if (status.startsWith('✅')) return false;              // already matched
+    if (status.startsWith('ยกเลิก')) return false;          // cancelled — not owed, not pending
     if (PAYOUT_STATUSES_FOR_INVOICE.includes(status)) return false; // already matched
     return true;
   }).map(r => ({
