@@ -337,6 +337,10 @@ function autoCreateApartmenteryBookings() {
         Logger.log(`same-day turnover: shrinking ${outgoingResId} (${b.room}) apartmentery ` +
           `bookingId ${outgoingAptId} endDate to ${newEndDate} before creating ${b.resId}`);
         updateApartmenteryBookingEndDateForRoom(b.room, outgoingAptId, newEndDate);
+        // Mimic a browser reloading the calendar view between the shrink
+        // and the add — see refreshApartmenteryUnitCalendarForRoom's
+        // comment in ApartmenteryClient.gs for why.
+        refreshApartmenteryUnitCalendarForRoom(b.room);
       } catch (err) {
         if (isApartmenterySessionExpiredError(err)) {
           Logger.log(`SESSION EXPIRED while shrinking endDate for ${outgoingResId} (${b.room}): ${err.message}`);
@@ -436,7 +440,9 @@ function autoCreateApartmenteryBookings() {
           continue;
         }
 
-        Logger.log(`skip ${b.resId} (${b.room}): collision reported but no exact guest+date match found in unit's calendar — inspect manually. (${err.apartmenteryError})`);
+        Logger.log(`skip ${b.resId} (${b.room}): collision reported but no exact guest+date match found in unit's calendar.` +
+          `${(outgoingResId && outgoingResId !== b.resId) ? ' This already tried the same-day-turnover shrink + calendar-refresh — if it\'s still colliding after that, it likely needs to be created manually on apartmentery.' : ' Not a same-day-turnover case — this collision is against some other booking, inspect manually.'}` +
+          ` (${err.apartmenteryError})`);
         result.skipped++;
         result.errors.push({ resId: b.resId, guest: b.guest, room: b.room, error: `collision, but couldn't recover bookingId — ${err.apartmenteryError}` });
         continue;
@@ -601,6 +607,7 @@ function backfillMissingApartmenteryBookings() {
         const newEndDate = _dateMinusOneDay_(b.checkin);
         Logger.log(`same-day turnover: shrinking ${outgoingResId} (${b.room}) apartmentery bookingId ${outgoingAptId} endDate to ${newEndDate} before creating ${b.resId}`);
         updateApartmenteryBookingEndDateForRoom(b.room, outgoingAptId, newEndDate);
+        refreshApartmenteryUnitCalendarForRoom(b.room);
       } catch (err) {
         if (isApartmenterySessionExpiredError(err)) {
           Logger.log(`SESSION EXPIRED while shrinking endDate for ${outgoingResId} (${b.room}): ${err.message}`);
@@ -689,7 +696,9 @@ function backfillMissingApartmenteryBookings() {
           continue;
         }
 
-        Logger.log(`skip ${b.resId} (${b.room}): collision reported but no exact guest+date match found in unit's calendar — inspect manually. (${err.apartmenteryError})`);
+        Logger.log(`skip ${b.resId} (${b.room}): collision reported but no exact guest+date match found in unit's calendar.` +
+          `${(outgoingResId && outgoingResId !== b.resId) ? ' This already tried the same-day-turnover shrink + calendar-refresh — if it\'s still colliding after that, it likely needs to be created manually on apartmentery.' : ' Not a same-day-turnover case — this collision is against some other booking, inspect manually.'}` +
+          ` (${err.apartmenteryError})`);
         result.skipped++;
         result.errors.push({ resId: b.resId, guest: b.guest, room: b.room, error: `collision, but couldn't recover bookingId — ${err.apartmenteryError}` });
         continue;

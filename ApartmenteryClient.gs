@@ -692,6 +692,37 @@ function updateApartmenteryBookingEndDateForRoom(roomRaw, bookingId, newEndDate)
 }
 
 /**
+ * Re-fetches a unit's calendar listing page — the same GET a browser
+ * does whenever the calendar view is shown or refreshed.
+ *
+ * Why: 2026-07-18, a same-day-turnover shrink (updateApartmenteryBookingEndDateForRoom)
+ * got a normal 3xx success response, and diagnoseMilesCollision20260718
+ * confirmed afterward that the new endDate really had persisted — yet
+ * the very next createApartmenteryBooking call for the incoming booking
+ * still got apartmentery's "การจองนี้ชนกับการจองอื่น" collision error,
+ * twice, a minute apart. Nathan confirmed doing the same shrink-then-add
+ * manually in the browser never hits this — so it isn't apartmentery's
+ * data actually being stale, it's specifically that manual use always
+ * loads the calendar page (via clicking into the unit) between the two
+ * writes and automation never does. Untested theory: apartmentery's
+ * collision check on the "add booking" form may run against a value it
+ * cached from the same session's last calendar-page load, not the
+ * database directly — so re-loading the calendar page right after the
+ * shrink (this function), before attempting the create, should make the
+ * add-booking form's collision check see the shrunk endDate the same way
+ * a real browser session would.
+ *
+ * Read-only, side-effect-free — if this theory is wrong, all it costs is
+ * one extra GET request.
+ */
+function refreshApartmenteryUnitCalendarForRoom(roomRaw) {
+  const unit = getApartmenteryUnitForRoom(roomRaw);
+  if (!unit) return;
+  const path = `/user/branch/${unit.branchId}/unit/${unit.unitId}/booking`;
+  _apartmenteryFetch_(path, { method: 'get' });
+}
+
+/**
  * Creates an invoice for a booking and returns its invoiceId.
  *
  * @param {string} branchId
