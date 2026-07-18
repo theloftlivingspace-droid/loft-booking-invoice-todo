@@ -167,7 +167,14 @@ function fixAllApartmenteryBookingIdsComprehensive20260716() {
       report.unchanged.push({ resId: row.resId, guest: row.guest, id: row.storedId });
       return;
     }
-    setApartmenteryBookingId_(row.resId, foundId);
+    // allowOverwriteConflict: true — this sweep independently re-verifies
+    // foundId against apartmentery's live calendar (room + guest + date),
+    // so it's authoritative even if another not-yet-processed row in this
+    // same sweep still holds foundId as its (wrong) stored value. The
+    // uniqueness guard in setApartmenteryBookingId_ exists to stop NEW
+    // wrong ids from the creation/recovery path, not to block a verified
+    // correction here.
+    setApartmenteryBookingId_(row.resId, foundId, { allowOverwriteConflict: true });
     Logger.log(`FIXED — ${row.resId} (${row.guest}, ${row.room}): "${row.storedId}" -> "${foundId}"`);
     report.fixed.push({ resId: row.resId, guest: row.guest, room: row.room, from: row.storedId, to: foundId });
   });
