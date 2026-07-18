@@ -135,8 +135,67 @@ function getApartmenteryBookingId_(resId) {
   return '';
 }
 
-/** Writes the apartmentery bookingId for a given Sheet1 ResId. */
-function setApartmenteryBookingId_(resId, apartmenteryBookingId) {
+/**
+ * Scans Sheet1's Apartmentery Booking ID column for any OTHER resId
+ * already holding this exact bookingId. A given apartmentery bookingId
+ * must map to exactly one resId — anything else means one of the two
+ * rows is (or is about to become) wrong. Returns the conflicting resId,
+ * or null if the bookingId is free (or only used by excludeResId itself).
+ *
+ * Added 2026-07-18 after the booking-id derangement bug resurfaced a
+ * second time (96 mismatched rows found by auditAllApartmenteryBookingIds,
+ * including brand-new July bookings created well after the first
+ * comprehensive fix on 2026-07-16) — the guest+date matcher in
+ * createApartmenteryBooking's fallback path can still silently return a
+ * wrong (but exact-match-satisfying) id, e.g. when apartmentery's calendar
+ * page hasn't yet indexed the just-created booking. Checking uniqueness
+ * at write-time stops a wrong id from ever landing in Sheet1, instead of
+ * only being caught later by a manual audit sweep.
+ */
+function _findResIdUsingApartmenteryBookingId_(apartmenteryBookingId, excludeResId) {
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
+  if (!src) return null;
+  const data = src.getDataRange().getValues();
+  const header = data[0];
+  const idx = indexMap_(header, ['ResId', APARTMENTERY_BOOKING_ID_COL_HEADER]);
+  if (idx.ResId < 0 || idx[APARTMENTERY_BOOKING_ID_COL_HEADER] < 0) return null;
+  const target = String(apartmenteryBookingId || '').trim();
+  if (!target) return null;
+  for (let i = 1; i < data.length; i++) {
+    const rResId = String(data[i][idx.ResId] || '').trim();
+    if (!rResId || rResId === excludeResId) continue;
+    if (String(data[i][idx[APARTMENTERY_BOOKING_ID_COL_HEADER]] || '').trim() === target) {
+      return rResId;
+    }
+  }
+  return null;
+}
+
+/**
+ * Writes the apartmentery bookingId for a given Sheet1 ResId.
+ *
+ * Guards against the same bookingId ever being written to two different
+ * resIds — a bookingId on apartmentery belongs to exactly one booking,
+ * so this must be true in Sheet1 too. Pass `{ allowOverwriteConflict: true }`
+ * only from a corrective sweep (e.g. fixAllApartmenteryBookingIdsComprehensive)
+ * that has independently re-verified the id against apartmentery's live
+ * calendar — never from the primary creation/recovery path, since that's
+ * exactly where a wrong id first gets introduced.
+ */
+function setApartmenteryBookingId_(resId, apartmenteryBookingId, opts) {
+  opts = opts || {};
+  if (!opts.allowOverwriteConflict) {
+    const conflictResId = _findResIdUsingApartmenteryBookingId_(apartmenteryBookingId, resId);
+    if (conflictResId) {
+      const msg = `refused to write bookingId ${apartmenteryBookingId} for ${resId} — ` +
+        `already assigned to a different resId (${conflictResId}). This lookup is likely ` +
+        `wrong (apartmentery calendar indexing lag or a stale match) — leaving ${resId} ` +
+        `without a bookingId so the next run retries instead of corrupting Sheet1.`;
+      Logger.log('setApartmenteryBookingId_: ' + msg);
+      return { ok: false, error: msg, conflictResId: conflictResId };
+    }
+  }
   addApartmenteryBookingIdColumnIfMissing_();
   const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
   const src = ss.getSheetByName(SRC_BOOKING_SHEET);
@@ -313,7 +372,22 @@ function autoCreateApartmenteryBookings() {
         continue;
       }
 
-      setApartmenteryBookingId_(b.resId, created.bookingId);
+      const writeResult = setApartmenteryBookingId_(b.resId, created.bookingId);
+      if (!writeResult.ok) {
+        // Uniqueness guard refused the write (bookingId already belongs to
+        // another resId) — apartmentery DID create a real booking for this
+        // guest just now, but our follow-up guest+date lookup grabbed the
+        // wrong id for it (see setApartmenteryBookingId_ comment). Leave
+        // b.done unset so this resId is retried next run; log loudly since
+        // there's now a real, un-tracked booking on apartmentery for this
+        // guest that needs manual linking.
+        Logger.log(`created a real apartmentery booking for ${b.resId} (${b.room}, ${b.guest}) but ` +
+          `could not record its id (${created.bookingId}) — ${writeResult.error} Needs manual lookup ` +
+          `on apartmentery to find the correct bookingId and link it by hand.`);
+        result.skipped++;
+        result.errors.push({ resId: b.resId, guest: b.guest, room: b.room, error: writeResult.error });
+        continue;
+      }
       setBookingDone(b.resId, true);
       Logger.log(`created ${b.resId} (${b.room}) -> apartmentery bookingId ${created.bookingId}`);
       result.created++;
@@ -347,7 +421,14 @@ function autoCreateApartmenteryBookings() {
         }
 
         if (recoveredId) {
-          setApartmenteryBookingId_(b.resId, recoveredId);
+          const writeResult = setApartmenteryBookingId_(b.resId, recoveredId);
+          if (!writeResult.ok) {
+            Logger.log(`collision-recovery for ${b.resId} (${b.room}, ${b.guest}) found bookingId ` +
+              `${recoveredId}, but ${writeResult.error} Needs manual review.`);
+            result.skipped++;
+            result.errors.push({ resId: b.resId, guest: b.guest, room: b.room, error: writeResult.error });
+            continue;
+          }
           setBookingDone(b.resId, true);
           Logger.log(`recovered ${b.resId} (${b.room}) -> existing apartmentery bookingId ${recoveredId} (was already in apartmentery, not newly created)`);
           result.created++; // counts toward "now has a bookingId", same outcome for the sheet
@@ -550,7 +631,14 @@ function backfillMissingApartmenteryBookings() {
         continue;
       }
 
-      setApartmenteryBookingId_(b.resId, created.bookingId);
+      const writeResult = setApartmenteryBookingId_(b.resId, created.bookingId);
+      if (!writeResult.ok) {
+        Logger.log(`[backfill] created a real apartmentery booking for ${b.resId} (${b.room}, ${b.guest}) ` +
+          `but could not record its id (${created.bookingId}) — ${writeResult.error} Needs manual lookup.`);
+        result.skipped++;
+        result.errors.push({ resId: b.resId, guest: b.guest, room: b.room, error: writeResult.error });
+        continue;
+      }
       setBookingDone(b.resId, true);
       Logger.log(`[backfill] created ${b.resId} (${b.room}) -> apartmentery bookingId ${created.bookingId}`);
       result.created++;
@@ -586,7 +674,14 @@ function backfillMissingApartmenteryBookings() {
         }
 
         if (recoveredId) {
-          setApartmenteryBookingId_(b.resId, recoveredId);
+          const writeResult = setApartmenteryBookingId_(b.resId, recoveredId);
+          if (!writeResult.ok) {
+            Logger.log(`[backfill] collision-recovery for ${b.resId} (${b.room}, ${b.guest}) found bookingId ` +
+              `${recoveredId}, but ${writeResult.error} Needs manual review.`);
+            result.skipped++;
+            result.errors.push({ resId: b.resId, guest: b.guest, room: b.room, error: writeResult.error });
+            continue;
+          }
           setBookingDone(b.resId, true);
           Logger.log(`[backfill] recovered ${b.resId} (${b.room}) -> existing apartmentery bookingId ${recoveredId} (was already in apartmentery, not newly created)`);
           result.created++; // counts toward "now has a bookingId", same outcome for the sheet
