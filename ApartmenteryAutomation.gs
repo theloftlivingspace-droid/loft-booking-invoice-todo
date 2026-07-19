@@ -305,12 +305,22 @@ function autoCreateApartmenteryBookings() {
   // of checkout-date -> resId up front so we know which outgoing booking to
   // shrink for each turnover we hit below.
   const outgoingByRoom = {};
+  // Back-edge of the same problem: the NEW booking's own checkout can equal
+  // ANOTHER booking's checkin (e.g. Mike 20->22, J Barber checks in 22).
+  // Shrinking the outgoing side doesn't help here since there's no existing
+  // apartmentery booking to shrink — instead we send the new booking with an
+  // endDate 1 day short of the real checkout, so it doesn't collide with the
+  // next guest's start date. The real checkout in Sheet1 is untouched.
+  const incomingByRoom = {};
   items.forEach(x => {
     if (/ยกเลิก|cancel/i.test(x.room)) return; // cancelled stays don't occupy the room
     if (!x.checkout) return;
     const rn = roomNum_(x.room);
     if (!outgoingByRoom[rn]) outgoingByRoom[rn] = {};
     outgoingByRoom[rn][x.checkout] = x.resId;
+    if (!x.checkin) return;
+    if (!incomingByRoom[rn]) incomingByRoom[rn] = {};
+    incomingByRoom[rn][x.checkin] = x.resId;
   });
 
   for (const b of items) {
@@ -355,6 +365,20 @@ function autoCreateApartmenteryBookings() {
       }
     }
 
+    // Back-edge check: does another booking in this room check in exactly
+    // when this one checks out? If so, apartmentery will refuse to create
+    // this booking against the full range — shrink the endDate we SEND by
+    // 1 day (Sheet1's real checkout is untouched).
+    const roomIncoming = incomingByRoom[roomNum_(b.room)];
+    const incomingResId = b.checkout && roomIncoming && roomIncoming[b.checkout];
+    const effectiveEndDate = (incomingResId && incomingResId !== b.resId)
+      ? _dateMinusOneDay_(b.checkout)
+      : (b.checkout || '');
+    if (incomingResId && incomingResId !== b.resId) {
+      Logger.log(`same-day turnover (back edge): ${b.resId} (${b.room}) checkout ${b.checkout} ` +
+        `matches ${incomingResId}'s checkin — sending apartmentery endDate ${effectiveEndDate} instead`);
+    }
+
     Logger.log(`attempting booking for ${b.resId} room ${b.room} guest ${b.guest}`);
 
     try {
@@ -365,7 +389,7 @@ function autoCreateApartmenteryBookings() {
 
       const created = createApartmenteryBookingForRoom(b.room, {
         startDate: b.checkin,
-        endDate: b.checkout || '',
+        endDate: effectiveEndDate,
         guestName: guestNameWithChannel,
         note: `${b.channel} ${b.resId}`.trim()
       });
@@ -575,12 +599,18 @@ function backfillMissingApartmenteryBookings() {
   // from ALL items (not just the ones missing an id) so a turnover against
   // an already-created booking still resolves correctly.
   const outgoingByRoom = {};
+  // Back-edge mirror of the same check — see comment in
+  // autoCreateApartmenteryBookings for why this is needed.
+  const incomingByRoom = {};
   items.forEach(x => {
     if (/ยกเลิก|cancel/i.test(x.room)) return;
     if (!x.checkout) return;
     const rn = roomNum_(x.room);
     if (!outgoingByRoom[rn]) outgoingByRoom[rn] = {};
     outgoingByRoom[rn][x.checkout] = x.resId;
+    if (!x.checkin) return;
+    if (!incomingByRoom[rn]) incomingByRoom[rn] = {};
+    incomingByRoom[rn][x.checkin] = x.resId;
   });
 
   for (const b of items) {
@@ -621,13 +651,23 @@ function backfillMissingApartmenteryBookings() {
       }
     }
 
+    const roomIncoming = incomingByRoom[roomNum_(b.room)];
+    const incomingResId = b.checkout && roomIncoming && roomIncoming[b.checkout];
+    const effectiveEndDate = (incomingResId && incomingResId !== b.resId)
+      ? _dateMinusOneDay_(b.checkout)
+      : (b.checkout || '');
+    if (incomingResId && incomingResId !== b.resId) {
+      Logger.log(`[backfill] same-day turnover (back edge): ${b.resId} (${b.room}) checkout ${b.checkout} ` +
+        `matches ${incomingResId}'s checkin — sending apartmentery endDate ${effectiveEndDate} instead`);
+    }
+
     Logger.log(`[backfill] attempting booking for ${b.resId} room ${b.room} guest ${b.guest}`);
 
     try {
       const guestNameWithChannel = b.channel ? `${b.guest} / ${b.channel}` : b.guest;
       const created = createApartmenteryBookingForRoom(b.room, {
         startDate: b.checkin,
-        endDate: b.checkout || '',
+        endDate: effectiveEndDate,
         guestName: guestNameWithChannel,
         note: `${b.channel} ${b.resId}`.trim()
       });
