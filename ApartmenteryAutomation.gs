@@ -479,6 +479,14 @@ function autoCreateApartmenteryBookings() {
     }
   }
 
+  if (result.created > 0 || (result.recovered || 0) > 0) {
+    // setBookingDone() called directly (not via the doPost 'setBookingDone'
+    // action) never refreshes Sheet1's row styling — that's why rows
+    // created by this automation (e.g. Mike Ubaydullaev, 214) sit with no
+    // background color until something else happens to restyle the sheet.
+    triggerStyleSheet1_();
+  }
+
   Logger.log('autoCreateApartmenteryBookings result: ' + JSON.stringify(result));
   return result;
 }
@@ -747,6 +755,10 @@ function backfillMissingApartmenteryBookings() {
       Logger.log(`ERROR creating booking for ${b.resId} (${b.room}): ${err.message} — ${err.apartmenteryError || ''}`);
       result.errors.push({ resId: b.resId, guest: b.guest, room: b.room, error: err.apartmenteryError || err.message });
     }
+  }
+
+  if (result.created > 0) {
+    triggerStyleSheet1_();
   }
 
   Logger.log('backfillMissingApartmenteryBookings result: ' + JSON.stringify(result));
