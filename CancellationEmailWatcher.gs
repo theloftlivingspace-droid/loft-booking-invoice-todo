@@ -24,19 +24,19 @@ var CANCEL_WATCHER_LABEL = 'CancelBot/Processed';
 function installCancellationEmailTrigger() {
   // ลบ trigger เก่าของฟังก์ชันนี้ก่อน กันซ้ำ
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'checkCancellationEmails_') {
+    if (t.getHandlerFunction() === 'checkCancellationEmails') {
       ScriptApp.deleteTrigger(t);
     }
   });
-  ScriptApp.newTrigger('checkCancellationEmails_')
+  ScriptApp.newTrigger('checkCancellationEmails')
     .timeBased()
     .everyMinutes(30)
     .create();
-  Logger.log('ตั้ง trigger checkCancellationEmails_ ทุก 30 นาทีแล้ว');
+  Logger.log('ตั้ง trigger checkCancellationEmails ทุก 30 นาทีแล้ว');
 }
 
 // ── Main entry (เรียกจาก time trigger) ──────────────────────────
-function checkCancellationEmails_() {
+function checkCancellationEmails() {
   var label = GmailApp.getUserLabelByName(CANCEL_WATCHER_LABEL) ||
     GmailApp.createLabel(CANCEL_WATCHER_LABEL);
 
@@ -45,7 +45,7 @@ function checkCancellationEmails_() {
     '-label:"' + CANCEL_WATCHER_LABEL + '" newer_than:14d';
 
   var threads = GmailApp.search(query, 0, 50);
-  Logger.log('checkCancellationEmails_: พบ ' + threads.length + ' thread(s)');
+  Logger.log('checkCancellationEmails: พบ ' + threads.length + ' thread(s)');
 
   threads.forEach(function (thread) {
     thread.getMessages().forEach(function (msg) {
@@ -60,7 +60,7 @@ function checkCancellationEmails_() {
         var parsed = parseCancellationEmail_(msgObj);
         if (parsed) handleParsedCancellation_(parsed);
       } catch (e) {
-        Logger.log('checkCancellationEmails_ error on message: ' + e);
+        Logger.log('checkCancellationEmails error on message: ' + e);
       }
     });
     thread.addLabel(label);
