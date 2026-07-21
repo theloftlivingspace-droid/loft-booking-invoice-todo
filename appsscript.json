@@ -13,6 +13,7 @@
     "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/drive.scripts",
     "https://www.googleapis.com/auth/script.scriptapp",
-    "https://www.googleapis.com/auth/gmail.readonly"
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.labels"
   ]
 }
