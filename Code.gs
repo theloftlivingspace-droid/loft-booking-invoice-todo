@@ -1264,10 +1264,18 @@ function cancelBooking_(resId) {
       triggerStyleSheet1_();
       var guest     = String(data[i][idx['ชื่อแขก']] || '').trim();
       var checkin   = idx['เช็คอิน']  >= 0 ? String(data[i][idx['เช็คอิน']]  || '').trim() : '';
+      var checkinYMD = formatCellDate_(checkin) || checkin;
 
-      // ปรับ end date ใน Apartmentery ให้ตรงกับ Sheet1 ด้วย (pattern เดียวกับ
-      // updateCheckoutDate_) — ถ้ายังไม่มี bookingId ให้ลอง backfill จาก
-      // guest name + checkin date ก่อน แล้วค่อยยิง update
+      // การจองทั้งหมด non-refundable — ยกเลิกแล้วเงินก็ยังเข้ามาอยู่ดี ดังนั้น
+      // ฝั่ง Apartmentery ต้อง "รักษา" booking ไว้ (ไม่ shrink ไปที่วันนี้ ซึ่งอาจ
+      // อยู่ก่อนวันเช็คอินด้วยซ้ำถ้ายกเลิกล่วงหน้า) ให้เหลือ 1 คืน = วันเช็คอิน
+      // เพื่อให้ยังมี booking รองรับตอนสร้าง invoice/receipt จาก payout ที่เข้ามา
+      var aptEndDate = checkinYMD ? addDaysYMD_(checkinYMD, 1) : todayBKK;
+      if (!aptEndDate) aptEndDate = todayBKK;
+
+      // ปรับ end date ใน Apartmentery (pattern เดียวกับ updateCheckoutDate_) —
+      // ถ้ายังไม่มี bookingId ให้ลอง backfill จาก guest name + checkin date
+      // ก่อน แล้วค่อยยิง update
       var apartmenterySynced = false, apartmenteryNote = '';
       try {
         var aptId = getApartmenteryBookingId_(resId);
@@ -1279,7 +1287,7 @@ function cancelBooking_(resId) {
           }
         }
         if (aptId) {
-          var r = updateApartmenteryBookingEndDateForRoom(currentRoom, aptId, todayBKK);
+          var r = updateApartmenteryBookingEndDateForRoom(currentRoom, aptId, aptEndDate);
           if (r && r.skipped) {
             apartmenteryNote = r.reason;
           } else {
@@ -1312,6 +1320,7 @@ function cancelBooking_(resId) {
       } catch(e) { Logger.log('LINE notify error: ' + e); }
       return {
         ok: true, room: newRoom, checkoutUpdated: todayBKK,
+        apartmenteryEndDate: aptEndDate,
         apartmenterySynced: apartmenterySynced, apartmenteryNote: apartmenteryNote
       };
     }
@@ -1361,6 +1370,15 @@ function formatCellDate_(val) {
 }
 
 function formatDateYMD_(d) {
+  return Utilities.formatDate(d, 'Asia/Bangkok', 'yyyy-MM-dd');
+}
+
+// รับ 'YYYY-MM-DD' แล้วบวกจำนวนวัน คืนค่าเป็น 'YYYY-MM-DD' (Bangkok)
+function addDaysYMD_(ymd, days) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd || '').trim());
+  if (!m) return '';
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  d.setUTCDate(d.getUTCDate() + days);
   return Utilities.formatDate(d, 'Asia/Bangkok', 'yyyy-MM-dd');
 }
 
