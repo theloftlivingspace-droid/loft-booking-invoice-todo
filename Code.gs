@@ -1255,23 +1255,25 @@ function cancelBooking_(resId) {
       // ถ้า mark ยกเลิกแล้วให้ข้าม (idempotent)
       if (/ยกเลิก|cancel/i.test(currentRoom)) return { ok: true, alreadyCancelled: true };
       const newRoom = currentRoom + ' ยกเลิก';
-      // เปลี่ยน checkout เป็นวันนี้ (Bangkok) เพื่อปลดล็อคห้องให้จองใหม่ได้ทันที
       var todayBKK = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
-      src.getRange(i + 1, idx['เลขห้อง'] + 1).setValue(newRoom);
-      if (idx['เช็คเอาท์'] >= 0) {
-        src.getRange(i + 1, idx['เช็คเอาท์'] + 1).setValue(todayBKK);
-      }
-      triggerStyleSheet1_();
       var guest     = String(data[i][idx['ชื่อแขก']] || '').trim();
       var checkin   = idx['เช็คอิน']  >= 0 ? String(data[i][idx['เช็คอิน']]  || '').trim() : '';
       var checkinYMD = formatCellDate_(checkin) || checkin;
 
-      // การจองทั้งหมด non-refundable — ยกเลิกแล้วเงินก็ยังเข้ามาอยู่ดี ดังนั้น
-      // ฝั่ง Apartmentery ต้อง "รักษา" booking ไว้ (ไม่ shrink ไปที่วันนี้ ซึ่งอาจ
-      // อยู่ก่อนวันเช็คอินด้วยซ้ำถ้ายกเลิกล่วงหน้า) ให้เหลือ 1 คืน = วันเช็คอิน
-      // เพื่อให้ยังมี booking รองรับตอนสร้าง invoice/receipt จาก payout ที่เข้ามา
-      var aptEndDate = checkinYMD ? addDaysYMD_(checkinYMD, 1) : todayBKK;
-      if (!aptEndDate) aptEndDate = todayBKK;
+      // ยังไม่ถึงวันเช็คอิน (ยกเลิกล่วงหน้า) → เช็คเอาท์ = วันเช็คอิน (เหลือ 0 คืน)
+      // เลยวันเช็คอินไปแล้ว (เข้าพักอยู่แล้วถูกยกเลิก) → เช็คเอาท์ = วันที่ยกเลิกจริง (วันนี้)
+      var notYetArrived = !!(checkinYMD && checkinYMD > todayBKK);
+      var newCheckoutYMD = notYetArrived ? checkinYMD : todayBKK;
+
+      src.getRange(i + 1, idx['เลขห้อง'] + 1).setValue(newRoom);
+      if (idx['เช็คเอาท์'] >= 0) {
+        src.getRange(i + 1, idx['เช็คเอาท์'] + 1).setValue(newCheckoutYMD);
+      }
+      triggerStyleSheet1_();
+
+      // Apartmentery: ใช้ตรรกะเดียวกับ Sheet1 ข้างบน — end date = วันเช็คอิน
+      // (ไม่ใช่ checkin+1 เหมือนเดิม) ถ้ายังไม่ถึงวันเช็คอิน, หรือ = วันนี้ ถ้าเข้าพักแล้ว
+      var aptEndDate = newCheckoutYMD || todayBKK;
 
       // ปรับ end date ใน Apartmentery (pattern เดียวกับ updateCheckoutDate_) —
       // ถ้ายังไม่มี bookingId ให้ลอง backfill จาก guest name + checkin date
@@ -1313,13 +1315,13 @@ function cancelBooking_(resId) {
         UrlFetchApp.fetch(botUrl + '/api/cancel-notify', {
           method: 'post',
           contentType: 'application/json',
-          payload: JSON.stringify({ room: currentRoom, guest: guest, checkin: checkin, checkout: todayBKK }),
+          payload: JSON.stringify({ room: currentRoom, guest: guest, checkin: checkin, checkout: newCheckoutYMD }),
           headers: { 'x-admin-token': adminTok },
           muteHttpExceptions: true
         });
       } catch(e) { Logger.log('LINE notify error: ' + e); }
       return {
-        ok: true, room: newRoom, checkoutUpdated: todayBKK,
+        ok: true, room: newRoom, checkoutUpdated: newCheckoutYMD,
         apartmenteryEndDate: aptEndDate,
         apartmenterySynced: apartmenterySynced, apartmenteryNote: apartmenteryNote
       };
