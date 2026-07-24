@@ -27,6 +27,21 @@
  * in the Apartmentery UI BEFORE running this, so the booking isn't left
  * with both.
  *
+ * ALSO fixes a second gap: the original one-off (like this one, before
+ * this edit) only called createApartmenteryInvoice() and stopped —
+ * no receipt, breaking the invoice→receipt loop that
+ * processPayoutToReceipt() normally completes for matched payouts.
+ * processPayoutToReceipt() itself doesn't take otherCharges though, so
+ * it can't be reused directly here — this replicates its two-step
+ * pattern (create invoice, then create receipt for that invoiceId) by
+ * hand instead, same as processPayoutToReceipt does internally.
+ * createApartmenteryReceipt() reads its prefill (rentalPrice/electPrice/
+ * waterPrice/vat/withholding) straight off the invoice's own receipt/add
+ * form, which Apartmentery computes from the invoice total — there's no
+ * separate other1-7 field on the receipt form to worry about, so this
+ * should carry the -2862.44 through correctly. VERIFY the resulting
+ * receipt amount matches.
+ *
  * Call once via the Apps Script editor (select
  * fixPhotographyAdjustment20260723 in the function dropdown, Run), check
  * the Logger output / Apartmentery UI, then delete this file (and
@@ -37,20 +52,35 @@ function fixPhotographyAdjustment20260723() {
   const branchId = APARTMENTERY_BRANCH_ID;         // '6801'
   const unitId = ROOM_TO_UNIT_ID['214'];            // '163867', room 214 Legacy
   const bookingId = '327170';                       // J Barber, 2026-07-22 -> 2026-07-31
+  const paidDate = '2026-07-23';                    // matches the Airbnb payout batch date
 
-  const result = createApartmenteryInvoice(
+  const invoiceResult = createApartmenteryInvoice(
     branchId,
     unitId,
     bookingId,
     '',             // rentalPrice: empty — try to suppress the ค่าเช่า row (was '0')
-    '2026-07-23',   // dateToPay: matches the Airbnb payout batch date
+    paidDate,
     [{
       desc: 'Photography Adjustment (Airbnb payout 2026-07-23, Batch THB 5613.97)',
       price: '-2862.44'   // negative: deducted from payout, not charged
     }]
   );
-
-  Logger.log('fixPhotographyAdjustment20260723: created invoice ' + JSON.stringify(result) +
+  Logger.log('fixPhotographyAdjustment20260723: created invoice ' + JSON.stringify(invoiceResult) +
     ' on booking ' + bookingId + ' (room 214, unit ' + unitId + ')');
-  return result;
+
+  try {
+    const receiptResult = createApartmenteryReceipt(
+      branchId, unitId, bookingId, invoiceResult.invoiceId, paidDate, 'transfer'
+    );
+    Logger.log('fixPhotographyAdjustment20260723: created receipt ' + JSON.stringify(receiptResult));
+    return { invoiceId: invoiceResult.invoiceId, receiptId: receiptResult.receiptId,
+      receiptLocation: receiptResult.location };
+  } catch (err) {
+    throw new Error(
+      `Invoice ${invoiceResult.invoiceId} was created successfully, but receipt creation ` +
+      `failed: ${err.message}. Call createApartmenteryReceipt('${branchId}', '${unitId}', ` +
+      `'${bookingId}', '${invoiceResult.invoiceId}', '${paidDate}', 'transfer') directly to ` +
+      `retry — do not re-run fixPhotographyAdjustment20260723, or it will duplicate the invoice.`
+    );
+  }
 }
