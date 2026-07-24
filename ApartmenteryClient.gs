@@ -731,7 +731,7 @@ function refreshApartmenteryUnitCalendarForRoom(roomRaw) {
  * @param {number} rentalPrice   Amount matched from the SCB payout.
  * @param {string} [dateToPayStr] YYYY-MM-DD, defaults to today.
  */
-function createApartmenteryInvoice(branchId, unitId, bookingId, rentalPrice, dateToPayStr) {
+function createApartmenteryInvoice(branchId, unitId, bookingId, rentalPrice, dateToPayStr, otherCharges) {
   const dateToPay = dateToPayStr || Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
 
   const path = `/user/branch/${branchId}/unit/${unitId}/booking/${bookingId}/invoice/add`;
@@ -779,6 +779,14 @@ function createApartmenteryInvoice(branchId, unitId, bookingId, rentalPrice, dat
     'invoiceNote.type': 'default',
     'invoiceNote.value': ''
   };
+
+  // ค่าใช้จ่ายอื่นๆ (other1-7) — e.g. Photography Adjustment ที่ Airbnb หักจาก
+  // payout ตรงๆ ไม่เกี่ยวกับค่าเช่า: บันทึกเป็น other-charge line item แยกจาก
+  // rentalPrice แทนที่จะไปปนกับค่าเช่าห้อง หรือสร้าง booking หลอกขึ้นมาใหม่
+  (otherCharges || []).slice(0, 7).forEach(function (item, idx) {
+    payload['other' + (idx + 1) + '.desc'] = item.desc || '';
+    payload['other' + (idx + 1) + '.price'] = item.price != null ? String(item.price) : '';
+  });
 
   const response = _apartmenteryFetch_(path, { method: 'post', payload: payload });
 
