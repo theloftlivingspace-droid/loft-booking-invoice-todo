@@ -31,15 +31,11 @@ const PROP_KEY_INVOICE_DONE = 'invoice_done_v1';
 const PROP_KEY_BOOKING_SEEN = 'booking_seen_v1';
 const PROP_KEY_INVOICE_SEEN = 'invoice_seen_v1';
 
-// Manual room overrides keyed by confCode, used only when the automatic
-// name-based lookup (lookupRoomFromIndex_) can't resolve a room — this
-// happens for adjustment/Resolution-type entries whose guest field is a
-// placeholder like "Guest" rather than a real guest name, so there's
-// nothing in Sheet1 to match against. Scoped by confCode (unique per
-// entry) rather than guest name, to avoid ever matching the wrong "Guest"
-// placeholder elsewhere in the sheet.
+// Manual room overrides keyed by confCode — an escape hatch for edge cases
+// the general batch auto-pick logic (see findRoomForGuest below) can't
+// handle on its own, e.g. a placeholder-guest adjustment with no other
+// resolvable entry in the same batch to pick a room from. Empty by default.
 const MANUAL_INVOICE_ROOM_OVERRIDES = {
-  'ABB-20260723-PHOTO': '214',  // Photography Adjustment -฿2,862.44, attached to J Barber's stay (room 214)
 };
 
 /* ============================================================
@@ -844,13 +840,36 @@ function getInvoiceToCreate_(ss, todayStr) {
     // ด้วยชื่อ + checkin ใกล้เคียง (±3 วัน) ถ้าหาไม่เจอ fallback เป็น roomList ทั้งหมด
     // (กว้างกว่าเดิม แต่ยังดีกว่าเดาผิด)
     const roomList = room.split(',').map(r => r.trim()).filter(Boolean);
+    function findRoomByName(guestName, entryCi) {
+      return lookupRoomFromIndex_(bookingIndex_, guestName, entryCi || '', roomList);
+    }
+
+    // Adjustment/Resolution-type entries (e.g. Photography Adjustment) get
+    // parsed with guest = 'Guest' — the literal placeholder parseAirbnbEmail
+    // writes when a charge has no attributable guest (see payout-income-log's
+    // own auto-pick logic, which does the same thing at the source). There's
+    // nothing in Sheet1 to name-match 'Guest' against, so name lookup always
+    // fails for these. Rather than hardcoding a room per confCode each time
+    // this happens, auto-pick the room from another *real* entry already
+    // resolved in the same batch — same principle as the source-side fix,
+    // reapplied here since this function does its own separate room lookup
+    // from the notes text and ignores the ↳ sub-rows entirely.
+    let batchRoomCandidate = null;
+    if (entries.length > 1) {
+      for (let k = 0; k < entries.length; k++) {
+        if (entries[k].guest === 'Guest') continue;
+        const ci_k = (entries[k].ci) ? entries[k].ci : checkin;
+        const found_k = findRoomByName(entries[k].guest || firstGuest, ci_k);
+        if (found_k) { batchRoomCandidate = found_k; break; }
+      }
+    }
     function findRoomForGuest(guestName, entryCi, entryConfCode) {
       if (entryConfCode && MANUAL_INVOICE_ROOM_OVERRIDES[entryConfCode]) {
         return MANUAL_INVOICE_ROOM_OVERRIDES[entryConfCode];
       }
-      // ใช้ checkin ของ entry นั้นๆ (จาก sub-row) ถ้ามี ไม่งั้นใช้ว่าง
-      const found = lookupRoomFromIndex_(bookingIndex_, guestName, entryCi || '', roomList);
+      const found = findRoomByName(guestName, entryCi);
       if (found) return found;
+      if (guestName === 'Guest' && batchRoomCandidate) return batchRoomCandidate;
       // หาไม่เจอใน Sheet1 (เช่น booking เก่าที่ถูกลบหลัง checkout) —
       // ห้ามคืน room string รวม (เช่น "363, 203") เพราะจะดู "ลิงค์ผิดห้อง"
       // ให้ flag ชัดเจนว่าไม่ทราบห้องแทน เพื่อให้ผู้ใช้ตรวจมือ
