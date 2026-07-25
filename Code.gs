@@ -31,6 +31,17 @@ const PROP_KEY_INVOICE_DONE = 'invoice_done_v1';
 const PROP_KEY_BOOKING_SEEN = 'booking_seen_v1';
 const PROP_KEY_INVOICE_SEEN = 'invoice_seen_v1';
 
+// Manual room overrides keyed by confCode, used only when the automatic
+// name-based lookup (lookupRoomFromIndex_) can't resolve a room — this
+// happens for adjustment/Resolution-type entries whose guest field is a
+// placeholder like "Guest" rather than a real guest name, so there's
+// nothing in Sheet1 to match against. Scoped by confCode (unique per
+// entry) rather than guest name, to avoid ever matching the wrong "Guest"
+// placeholder elsewhere in the sheet.
+const MANUAL_INVOICE_ROOM_OVERRIDES = {
+  'ABB-20260723-PHOTO': '214',  // Photography Adjustment -฿2,862.44, attached to J Barber's stay (room 214)
+};
+
 /* ============================================================
  *  Web app entry point
  *  GET ?action=getData        → JSON API (for Vercel/React)
@@ -833,7 +844,10 @@ function getInvoiceToCreate_(ss, todayStr) {
     // ด้วยชื่อ + checkin ใกล้เคียง (±3 วัน) ถ้าหาไม่เจอ fallback เป็น roomList ทั้งหมด
     // (กว้างกว่าเดิม แต่ยังดีกว่าเดาผิด)
     const roomList = room.split(',').map(r => r.trim()).filter(Boolean);
-    function findRoomForGuest(guestName, entryCi) {
+    function findRoomForGuest(guestName, entryCi, entryConfCode) {
+      if (entryConfCode && MANUAL_INVOICE_ROOM_OVERRIDES[entryConfCode]) {
+        return MANUAL_INVOICE_ROOM_OVERRIDES[entryConfCode];
+      }
       // ใช้ checkin ของ entry นั้นๆ (จาก sub-row) ถ้ามี ไม่งั้นใช้ว่าง
       const found = lookupRoomFromIndex_(bookingIndex_, guestName, entryCi || '', roomList);
       if (found) return found;
@@ -876,7 +890,7 @@ function getInvoiceToCreate_(ss, todayStr) {
       // cancellation payout, conf HMFTY4YTTK, stuck at "ห้อง ?" despite the
       // cancelled booking ABB-e4bdb0e9a1-20260705 being an exact name+date match).
       const roomNeedsLookup = (entries.length > 1 && roomList.length > 1) || !roomNum_(room);
-      const entryRoom = roomNeedsLookup ? findRoomForGuest(entryGuest, entryCheckin) : room;
+      const entryRoom = roomNeedsLookup ? findRoomForGuest(entryGuest, entryCheckin, entry.confCode) : room;
       out.push({
         invoiceKey, bookingId, room: entryRoom,
         guest: entryGuest,
