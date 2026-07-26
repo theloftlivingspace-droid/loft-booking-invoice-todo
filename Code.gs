@@ -1369,13 +1369,22 @@ function cancelBooking_(resId) {
 function triggerStyleSheet1_() {
   try {
     var PAYOUT_GAS_URL = 'https://script.google.com/macros/s/AKfycbyAP9Z_pIlKrXv9AOXwDhY0wNVSSFL0vU8VuH0SssFyxretRyt9CJNjxVZOLN3eFjs/exec';
-    UrlFetchApp.fetch(PAYOUT_GAS_URL, {
+    var resp = UrlFetchApp.fetch(PAYOUT_GAS_URL, {
       method: 'post',
       contentType: 'application/json',
       payload: JSON.stringify({ action: 'styleSheet1' }),
       muteHttpExceptions: true,
       followRedirects: true,
     });
+    // Still fire-and-forget (callers don't wait on this), but log the
+    // outcome instead of silently discarding it — previously any failure
+    // here (network blip, webapp cold start, quota) left zero trace
+    // anywhere, so a cancelled booking could sit unstyled indefinitely
+    // with no way to tell this call ever ran, let alone failed.
+    var code = resp.getResponseCode();
+    if (code !== 200) {
+      Logger.log('triggerStyleSheet1_: non-200 response ' + code + ' — ' + resp.getContentText().substring(0, 200));
+    }
   } catch (e) {
     Logger.log('triggerStyleSheet1_ error (non-fatal): ' + e);
   }
