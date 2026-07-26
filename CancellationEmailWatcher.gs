@@ -18,37 +18,58 @@
  *  ตัวต้นทางใน payout-income-log อย่าลืม sync มาที่นี่ด้วย
  * ============================================================ */
 
-var CANCEL_WATCHER_LABEL = 'CancelBot/Processed';
+// dedupe แบบไม่มี label ให้เห็นในกล่องจดหมาย — เก็บ message ID ที่ประมวลผล
+// แล้วไว้ใน Script Properties แทน (มองไม่เห็นจาก Gmail UI เลย)
+var CANCEL_WATCHER_PROP_KEY = 'CANCEL_WATCHER_PROCESSED_IDS';
+var CANCEL_WATCHER_MAX_IDS = 1000; // กันไม่ให้ property โตไม่จำกัด
 
 // ── Setup: รันครั้งเดียวจาก editor ──────────────────────────────
 function installCancellationEmailTrigger() {
   // ลบ trigger เก่าของฟังก์ชันนี้ก่อน กันซ้ำ
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'checkCancellationEmails') {
+    if (t.getHandlerFunction() === 'checkCancellationEmails_') {
       ScriptApp.deleteTrigger(t);
     }
   });
-  ScriptApp.newTrigger('checkCancellationEmails')
+  ScriptApp.newTrigger('checkCancellationEmails_')
     .timeBased()
     .everyMinutes(30)
     .create();
-  Logger.log('ตั้ง trigger checkCancellationEmails ทุก 30 นาทีแล้ว');
+  Logger.log('ตั้ง trigger checkCancellationEmails_ ทุก 30 นาทีแล้ว');
+}
+
+function getProcessedIds_() {
+  var raw = PropertiesService.getScriptProperties().getProperty(CANCEL_WATCHER_PROP_KEY);
+  if (!raw) return [];
+  try { return JSON.parse(raw); } catch (e) { return []; }
+}
+
+function addProcessedIds_(existingIds, newIds) {
+  var merged = existingIds.concat(newIds);
+  if (merged.length > CANCEL_WATCHER_MAX_IDS) {
+    merged = merged.slice(merged.length - CANCEL_WATCHER_MAX_IDS);
+  }
+  PropertiesService.getScriptProperties().setProperty(CANCEL_WATCHER_PROP_KEY, JSON.stringify(merged));
 }
 
 // ── Main entry (เรียกจาก time trigger) ──────────────────────────
-function checkCancellationEmails() {
-  var label = GmailApp.getUserLabelByName(CANCEL_WATCHER_LABEL) ||
-    GmailApp.createLabel(CANCEL_WATCHER_LABEL);
+function checkCancellationEmails_() {
+  var processedIds = getProcessedIds_();
+  var processedSet = {};
+  processedIds.forEach(function (id) { processedSet[id] = true; });
 
   var query = '(from:automated@airbnb.com OR from:no-reply@app.littlehotelier.com ' +
     'OR from:auto_reservation@trip.com OR from:noreply_htl@trip.com) ' +
-    '-label:"' + CANCEL_WATCHER_LABEL + '" newer_than:14d';
+    'newer_than:14d';
 
   var threads = GmailApp.search(query, 0, 50);
-  Logger.log('checkCancellationEmails: พบ ' + threads.length + ' thread(s)');
+  Logger.log('checkCancellationEmails_: พบ ' + threads.length + ' thread(s)');
 
+  var newlyProcessed = [];
   threads.forEach(function (thread) {
     thread.getMessages().forEach(function (msg) {
+      var id = msg.getId();
+      if (processedSet[id]) return; // เคยประมวลผลแล้ว ข้าม
       try {
         var msgObj = {
           subject: msg.getSubject(),
@@ -60,11 +81,13 @@ function checkCancellationEmails() {
         var parsed = parseCancellationEmail_(msgObj);
         if (parsed) handleParsedCancellation_(parsed);
       } catch (e) {
-        Logger.log('checkCancellationEmails error on message: ' + e);
+        Logger.log('checkCancellationEmails_ error on message: ' + e);
       }
+      newlyProcessed.push(id);
     });
-    thread.addLabel(label);
   });
+
+  if (newlyProcessed.length) addProcessedIds_(processedIds, newlyProcessed);
 }
 
 function handleParsedCancellation_(parsed) {
