@@ -124,6 +124,16 @@ function notifyAdminUncertainCancel_(parsed, reason) {
     'เลขอ้างอิง OTA: ' + (parsed.bookingRef || '-') + '\n' +
     'เหตุผล: ' + reason + '\n' +
     'Subject: ' + parsed.raw.subject;
+
+  // เขียนลงชีต Cancel_Needs_Review เสมอ ไม่ว่า LINE alert ด้านล่างจะสำเร็จ
+  // หรือไม่ก็ตาม — กัน Render cold-start timeout หรือ bot ล่มแล้วทำให้
+  // cancellation หายไปเงียบๆ โดยไม่มีร่องรอยเลย
+  try {
+    writeCancelNeedsReviewRow_(parsed, reason);
+  } catch (e) {
+    Logger.log('notifyAdminUncertainCancel_ sheet-log error: ' + e);
+  }
+
   try {
     var props    = PropertiesService.getScriptProperties();
     var botUrl   = props.getProperty('BOT_URL')    || 'https://hotel-line-bot.onrender.com';
@@ -138,6 +148,26 @@ function notifyAdminUncertainCancel_(parsed, reason) {
   } catch (e) {
     Logger.log('notifyAdminUncertainCancel_ LINE error: ' + e);
   }
+}
+
+function writeCancelNeedsReviewRow_(parsed, reason) {
+  var ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  var sheet = ss.getSheetByName('Cancel_Needs_Review');
+  if (!sheet) {
+    sheet = ss.insertSheet('Cancel_Needs_Review');
+    sheet.appendRow(['Timestamp', 'OTA', 'แขก', 'เช็คอิน', 'เช็คเอาท์', 'เลขอ้างอิง OTA', 'เหตุผล', 'Subject']);
+    sheet.setFrozenRows(1);
+  }
+  sheet.appendRow([
+    new Date(),
+    parsed.ota || '-',
+    parsed.guestName || '-',
+    parsed.checkIn || '-',
+    parsed.checkOut || '-',
+    parsed.bookingRef || '-',
+    reason,
+    parsed.raw ? parsed.raw.subject : '-',
+  ]);
 }
 
 /* ============================================================
@@ -220,6 +250,27 @@ function findBookingEntry_(guestRaw, ci, byGuest) {
       } else if (cjkCands.length === 1) {
         return cjkCands[0];
       }
+    }
+  }
+
+  // 2.5 Bare short first name (เช่น "Wy") — match กับ token แรกของชื่อเต็มใน
+  // Sheet1 ("Wy Yin" → token แรก "wy") auto-cancel ได้ก็ต่อเมื่อมี candidate
+  // เดียวเท่านั้นที่เช็คอินตรงกันแบบ exact (CI_WINDOW_DATE = ±1 วัน) — ชื่อสั้น
+  // แบบนี้ชนกันง่าย เลยต้องใช้วันที่ช่วยยืนยันเสมอ ไม่ auto-cancel จากชื่ออย่างเดียว
+  var gkParts = gk.split(' ');
+  if (gkParts.length === 1 && gk.length <= 6 && ci) {
+    var shortNameCands = [];
+    Object.keys(byGuest).forEach(function (k) {
+      var kFirstToken = k.split(' ')[0];
+      if (kFirstToken === gk) {
+        shortNameCands = shortNameCands.concat(byGuest[k]);
+      }
+    });
+    if (shortNameCands.length) {
+      var dcShort = shortNameCands.filter(function (c) {
+        return c.ci && Math.abs(ci.getTime() - c.ci.getTime()) <= CI_WINDOW_DATE;
+      });
+      if (dcShort.length === 1) return dcShort[0];
     }
   }
 
