@@ -81,6 +81,8 @@ function applyManuallyVerifiedIds20260718() {
     report.applied.push(Object.assign({ before }, fix));
   });
 
+  if (report.cleared.length || report.applied.length) triggerStyleSheet1_();
+
   Logger.log(`SUMMARY: cleared=${report.cleared.length} applied=${report.applied.length} failed=${report.failed.length}`);
   Logger.log(JSON.stringify(report, null, 2));
   return report;

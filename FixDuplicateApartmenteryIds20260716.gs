@@ -86,6 +86,8 @@ function fixDuplicateApartmenteryIds20260716() {
     report.fixed.push({ resId: r.resId, guest: r.guest, from: currentId, to: foundId });
   });
 
+  if (report.fixed.length) triggerStyleSheet1_();
+
   Logger.log('fixDuplicateApartmenteryIds20260716 report: ' + JSON.stringify(report, null, 2));
   return report;
 }

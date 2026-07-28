@@ -41,6 +41,8 @@ function applyConfirmedSafeCandidates20260718() {
     report.applied.push(fix);
   });
 
+  if (report.applied.length) triggerStyleSheet1_();
+
   Logger.log(`SUMMARY: applied=${report.applied.length} failed=${report.failed.length}`);
   Logger.log(JSON.stringify(report, null, 2));
   return report;

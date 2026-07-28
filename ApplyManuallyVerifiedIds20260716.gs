@@ -32,6 +32,7 @@ function applyManuallyVerifiedIds20260716() {
     report.push({ resId: r.resId, guest: r.guest, from: before, to: r.id });
   });
 
+  triggerStyleSheet1_();
   Logger.log('Done — all 9 rows written. Re-run auditAllApartmenteryBookingIds to confirm 0 mismatches remain.');
   return report;
 }

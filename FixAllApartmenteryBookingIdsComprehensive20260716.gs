@@ -179,6 +179,8 @@ function fixAllApartmenteryBookingIdsComprehensive20260716() {
     report.fixed.push({ resId: row.resId, guest: row.guest, room: row.room, from: row.storedId, to: foundId });
   });
 
+  if (report.fixed.length) triggerStyleSheet1_();
+
   Logger.log('fixAllApartmenteryBookingIdsComprehensive20260716 report: ' + JSON.stringify(report, null, 2));
   Logger.log(`SUMMARY: fixed=${report.fixed.length} unresolved=${report.unresolved.length} unchanged=${report.unchanged.length}`);
   return report;

@@ -28,5 +28,6 @@ function applyMilesManualBooking20260718() {
     return;
   }
   setBookingDone(resId, true);
+  triggerStyleSheet1_();
   Logger.log(`DONE — ${resId}: apartmentery bookingId set to ${bookingId} (manually created by Nathan), marked done.`);
 }

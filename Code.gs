@@ -424,6 +424,7 @@ function updateCheckoutDate_(body) {
         aptId = foundId;
         setApartmenteryBookingId_(resId, foundId);
         result.apartmenteryBackfilled = true;
+        triggerStyleSheet1_();
       }
     }
     if (aptId) {
@@ -1319,6 +1320,7 @@ function cancelBooking_(resId) {
           if (foundId) {
             aptId = foundId;
             setApartmenteryBookingId_(resId, foundId);
+            triggerStyleSheet1_();
           }
         }
         if (aptId) {

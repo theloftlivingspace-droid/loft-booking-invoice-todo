@@ -24,6 +24,7 @@ function applyManuallyVerifiedIdsRound2_20260716() {
     report.push({ resId: r.resId, guest: r.guest, from: before, to: r.id });
   });
 
+  triggerStyleSheet1_();
   Logger.log('Done. Re-run auditAllApartmenteryBookingIds to confirm 0 real problems remain (the 3 romanization-only name mismatches — 全,桂珍 / Yunjui Lin / La\'Tavia Antrice — are expected and fine).');
   return report;
 }

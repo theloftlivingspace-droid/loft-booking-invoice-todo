@@ -828,6 +828,7 @@ function applyConfirmedSafeStragglers20260716() {
     setApartmenteryBookingId_(r.resId, r.id);
     Logger.log(`applyConfirmedSafeStragglers20260716: ${r.resId} "${before}" -> "${r.id}"`);
   });
+  triggerStyleSheet1_();
   Logger.log('Done. Re-run auditAllApartmenteryBookingIds to confirm these now show OK and nothing new broke.');
 }
 
