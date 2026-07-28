@@ -345,10 +345,23 @@ function parseAirbnb_(message) {
   var nameMatch = text.match(/your guest\s+([A-Za-z' -]+?)\s+(?:had to cancel|canceled|cancelled)/i);
 
   var checkIn = null, checkOut = null;
-  var rangeMatch = subject.match(/for\s+([A-Za-z]{3})\s+(\d{1,2})\s*[–-]\s*(?:([A-Za-z]{3})\s+)?(\d{1,2}),\s*(\d{4})/);
-  if (rangeMatch) {
-    checkIn = toIsoDate_(rangeMatch[2], rangeMatch[1], rangeMatch[5]);
-    checkOut = toIsoDate_(rangeMatch[4], rangeMatch[3] || rangeMatch[1], rangeMatch[5]);
+  var emailYear = message.date ? new Date(message.date).getFullYear() : new Date().getFullYear();
+
+  // เทมเพลตบางแบบใส่ปีมาด้วย (เช่น "for Aug 31 – Oct 24, 2026") — เช็คทั้ง
+  // subject และ body ก่อน
+  var rangeMatchWithYear = subject.match(/for\s+([A-Za-z]{3})\s+(\d{1,2})\s*[–-]\s*(?:([A-Za-z]{3})\s+)?(\d{1,2}),\s*(\d{4})/)
+    || text.match(/for\s+([A-Za-z]{3})\s+(\d{1,2})\s*[–-]\s*(?:([A-Za-z]{3})\s+)?(\d{1,2}),\s*(\d{4})/);
+  if (rangeMatchWithYear) {
+    checkIn = toIsoDate_(rangeMatchWithYear[2], rangeMatchWithYear[1], rangeMatchWithYear[5]);
+    checkOut = toIsoDate_(rangeMatchWithYear[4], rangeMatchWithYear[3] || rangeMatchWithYear[1], rangeMatchWithYear[5]);
+  } else {
+    // เทมเพลตจริงที่เจอ ("...cancel reservation XXXXX for Aug 31 – Oct 24.")
+    // ไม่มีปีเลย — ใช้ปีจากวันที่อีเมลมาถึงแทน (เหมือน parseLittleHotelierDirect_)
+    var rangeMatchNoYear = text.match(/for\s+([A-Za-z]{3})\s+(\d{1,2})\s*[–-]\s*(?:([A-Za-z]{3})\s+)?(\d{1,2})\b/);
+    if (rangeMatchNoYear) {
+      checkIn = toIsoDate_(rangeMatchNoYear[2], rangeMatchNoYear[1], emailYear);
+      checkOut = toIsoDate_(rangeMatchNoYear[4], rangeMatchNoYear[3] || rangeMatchNoYear[1], emailYear);
+    }
   }
 
   return {
