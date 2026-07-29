@@ -863,26 +863,24 @@ function createApartmenteryInvoice(branchId, unitId, bookingId, rentalPrice, dat
  * @returns {string|null}
  */
 function getExistingApartmenteryInvoiceId_(branchId, unitId, bookingId) {
-  // NOT /edit — confirmed via execution log 2026-07-30 that /edit returns
-  // HTTP 400 for every booking tested here, which makes sense: every one of
-  // these bookings already HAS an invoice (that's the whole reason this
-  // function is being called), and Apartmentery apparently disables editing
-  // a booking once it's been invoiced. The plain (non-edit) booking detail
-  // page is what a real invoice URL is nested under — confirmed against
-  // Nathan's own example: https://apartmentery.com/user/branch/6801/unit/
-  // 163865/booking/325196/invoice/2769730 — so that page is expected to
-  // list/link the invoice the same way.
-  const viewPath = `/user/branch/${branchId}/unit/${unitId}/booking/${bookingId}`;
+  // Confirmed 2026-07-30 by Nathan directly: tapping "บริหารใบแจ้งหนี้"
+  // (Manage Invoice) on a booking's page in Apartmentery goes to
+  // .../booking/{id}/invoice — this is the actual invoice list page for
+  // the booking, and is what should list/link the real invoice. Neither
+  // /edit (400s once invoiced) nor the plain booking page (loads fine but
+  // has no invoice link in it) worked — see git history for those two
+  // failed attempts before this one.
+  const listPath = `/user/branch/${branchId}/unit/${unitId}/booking/${bookingId}/invoice`;
   let response;
   try {
-    response = _apartmenteryFetch_(viewPath, { method: 'get' });
+    response = _apartmenteryFetch_(listPath, { method: 'get' });
   } catch (err) {
     if (isApartmenterySessionExpiredError(err)) throw err;
     Logger.log(`getExistingApartmenteryInvoiceId_: fetch failed for booking ${bookingId}: ${err.message}`);
     return null;
   }
   if (response.getResponseCode() !== 200) {
-    Logger.log(`getExistingApartmenteryInvoiceId_: booking ${bookingId} detail page returned ` +
+    Logger.log(`getExistingApartmenteryInvoiceId_: booking ${bookingId} invoice-list page returned ` +
       `HTTP ${response.getResponseCode()}, can't scrape invoice ID.`);
     return null;
   }
@@ -890,7 +888,7 @@ function getExistingApartmenteryInvoiceId_(branchId, unitId, bookingId) {
   // matches the "invoice/add" link itself, only a link to a real invoice.
   const match = response.getContentText().match(/\/invoice\/(\d+)(?!\d)/);
   if (!match) {
-    Logger.log(`getExistingApartmenteryInvoiceId_: booking ${bookingId} detail page loaded ` +
+    Logger.log(`getExistingApartmenteryInvoiceId_: booking ${bookingId} invoice-list page loaded ` +
       `(HTTP 200) but no /invoice/{digits} link found in it.`);
   }
   return match ? match[1] : null;
