@@ -678,7 +678,7 @@ function getBookingToAdd_(ss, todayStr) {
   const header = data[0];
   const rows = data.slice(1).filter(r => r.join('').trim() !== '');
 
-  const idx = indexMap_(header, ['เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์', 'Channel', 'ResId', 'Note']);
+  const idx = indexMap_(header, ['เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์', 'Channel', 'ResId', 'Note', 'Apartmentery Booking ID']);
 
   const doneMap = getProp_(PROP_KEY_BOOKING_DONE);
   const seenMap = getProp_(PROP_KEY_BOOKING_SEEN);
@@ -706,6 +706,7 @@ function getBookingToAdd_(ss, todayStr) {
       firstSeen, isNewToday,
       done: !!doneMap[resId],
       matchKeys: makeMatchKeys_(guest, checkin, room),
+      apartmenteryBookingId: String(r[idx['Apartmentery Booking ID']] || '').trim(),
     };
   });
 
