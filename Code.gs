@@ -596,6 +596,14 @@ function doGet_(e) {
     return jsonResponse_(result);
   }
 
+  // Read-only against Apartmentery (see getExistingApartmenteryInvoiceId_) —
+  // exposed as a GET action so it can be triggered from a plain URL on
+  // mobile, without opening the Apps Script editor. Can take up to ~5 min
+  // (same runtime budget as the function itself); safe to re-run.
+  if (action === 'backfillApartmenteryInvoiceIds') {
+    return jsonResponse_(backfillApartmenteryInvoiceIds());
+  }
+
   // Default: serve HTML webapp
   const template = HtmlService.createTemplateFromFile('Index');
   return template.evaluate()
