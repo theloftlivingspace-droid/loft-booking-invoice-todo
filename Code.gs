@@ -613,13 +613,55 @@ function jsonResponse_(data) {
 /* ============================================================
  *  Data loading
  * ============================================================ */
+/**
+ * Fills in apartmenteryBookingId on invoice items that don't already have
+ * one from invoice_apt_ids_v1 (i.e. invoices created before that map
+ * existed, or not yet backfilled by backfillApartmenteryInvoiceIds()).
+ *
+ * Matches each invoice to its booking the same way
+ * autoCreateApartmenteryInvoicesAndReceipts does (matchKeys + name guard),
+ * then reuses that booking's OWN "Apartmentery Booking ID" column value —
+ * which is written the moment the booking itself is created in Apartmentery,
+ * independent of whether an invoice/invoiceId has ever been recorded for it.
+ * This lets the-loft-admin fall back to linking the 🧾/NET button straight to
+ * the booking page (same URL as the guest-name link) instead of showing no
+ * link at all, with zero extra Apartmentery HTTP calls — Nathan asked
+ * 2026-07-30 why this couldn't be "simple like the booking link", and this
+ * is that: no scrape needed for the fallback, only for the exact deep link.
+ */
+function fillInvoiceApartmenteryBookingIdsFallback_(bookingItems, invoiceItems) {
+  const keyToAptBookingId = {};
+  bookingItems.forEach(b => {
+    if (!b.apartmenteryBookingId) return;
+    (b.matchKeys || []).forEach(k => {
+      if (!keyToAptBookingId[k]) keyToAptBookingId[k] = { aptBookingId: b.apartmenteryBookingId, guest: b.guest };
+    });
+  });
+  invoiceItems.forEach(inv => {
+    if (inv.apartmenteryBookingId) return; // already persisted for real via invoice_apt_ids_v1
+    for (const k of (inv.matchKeys || [])) {
+      const candidate = keyToAptBookingId[k];
+      if (!candidate) continue;
+      if (!_namesMatchIgnoringOrder_(inv.guest, candidate.guest) &&
+          !_namesMatchIgnoringOrder_(candidate.guest, inv.guest)) {
+        continue;
+      }
+      inv.apartmenteryBookingId = candidate.aptBookingId;
+      break;
+    }
+  });
+  return invoiceItems;
+}
+
 function getDashboardData() {
   const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
   const todayStr = formatDateYMD_(new Date());
+  const booking = getBookingToAdd_(ss, todayStr);
+  const invoice = fillInvoiceApartmenteryBookingIdsFallback_(booking, getInvoiceToCreate_(ss, todayStr));
   return {
     today: todayStr,
-    booking: getBookingToAdd_(ss, todayStr),
-    invoice: getInvoiceToCreate_(ss, todayStr),
+    booking: booking,
+    invoice: invoice,
     pendingMatch: getPendingMatchPayouts_(ss),
   };
 }
