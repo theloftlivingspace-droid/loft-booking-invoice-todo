@@ -554,6 +554,7 @@ function autoCreateApartmenteryInvoicesAndReceipts() {
         continue;
       }
       setInvoiceDone(inv.invoiceKey, true);
+      setInvoiceApartmenteryIds(inv.invoiceKey, aptBookingId, outcome.invoiceId);
       result.created++;
 
     } catch (err) {

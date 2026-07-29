@@ -30,6 +30,9 @@ const PROP_KEY_BOOKING_DONE = 'booking_done_v1';
 const PROP_KEY_INVOICE_DONE = 'invoice_done_v1';
 const PROP_KEY_BOOKING_SEEN = 'booking_seen_v1';
 const PROP_KEY_INVOICE_SEEN = 'invoice_seen_v1';
+// invoiceKey -> "aptBookingId:invoiceId" (compact — same 9KB Script Properties
+// limit applies as invoice_done_v1, see safeSetInvoiceApartmenteryIdsMap_).
+const PROP_KEY_INVOICE_APT_IDS = 'invoice_apt_ids_v1';
 
 // Manual room overrides keyed by confCode — an escape hatch for edge cases
 // the general batch auto-pick logic (see findRoomForGuest below) can't
@@ -798,6 +801,7 @@ function getInvoiceToCreate_(ss, todayStr) {
 
   const doneMap = getProp_(PROP_KEY_INVOICE_DONE);
   const seenMap = getProp_(PROP_KEY_INVOICE_SEEN);
+  const aptIdsMap = getProp_(PROP_KEY_INVOICE_APT_IDS);
   let seenChanged = false;
   const out = [];
 
@@ -912,6 +916,8 @@ function getInvoiceToCreate_(ss, todayStr) {
       // cancelled booking ABB-e4bdb0e9a1-20260705 being an exact name+date match).
       const roomNeedsLookup = (entries.length > 1 && roomList.length > 1) || !roomNum_(room);
       const entryRoom = roomNeedsLookup ? findRoomForGuest(entryGuest, entryCheckin, entry.confCode) : room;
+      const aptIdsRaw = aptIdsMap[invoiceKey] || '';
+      const aptIdsParts = aptIdsRaw.split(':');
       out.push({
         invoiceKey, bookingId, room: entryRoom,
         guest: entryGuest,
@@ -926,6 +932,8 @@ function getInvoiceToCreate_(ss, todayStr) {
         firstSeen, isNewInList: isNewSeen,
         done: !!doneMap[invoiceKey],
         matchKeys: makeMatchKeys_(entryGuest, entryCheckin, entryRoom),
+        apartmenteryBookingId: aptIdsParts[0] || '',
+        apartmenteryInvoiceId: aptIdsParts[1] || '',
       });
     });
   });
@@ -1252,6 +1260,55 @@ function runRepairStuckInvoiceDoneFlags(knownCreatedInvoiceKeys) {
   });
   if (fixed > 0) safeSetInvoiceDoneMap_(doneMap);
   Logger.log(`runRepairStuckInvoiceDoneFlags: fixed ${fixed} stuck invoice key(s)`);
+}
+
+/**
+ * Persists the Apartmentery bookingId + invoiceId that processPayoutToReceiptForRoom()
+ * just created for this invoiceKey, so the frontend can link the 🧾 button
+ * straight to https://apartmentery.com/user/branch/.../booking/{aptBookingId}/invoice/{invoiceId}
+ * instead of only jumping to the Invoice To Create tab. Mirrors setInvoiceDone's
+ * call site exactly (see autoCreateApartmenteryInvoicesAndReceipts in
+ * ApartmenteryAutomation.gs) — call right after setInvoiceDone(invoiceKey, true).
+ */
+function setInvoiceApartmenteryIds(invoiceKey, aptBookingId, invoiceId) {
+  if (!invoiceKey || !aptBookingId || !invoiceId) return false;
+  const map = getProp_(PROP_KEY_INVOICE_APT_IDS);
+  map[invoiceKey] = aptBookingId + ':' + invoiceId;
+  safeSetInvoiceApartmenteryIdsMap_(map);
+  return true;
+}
+
+// Same 9KB Script Properties ceiling as invoice_done_v1 — see
+// safeSetInvoiceDoneMap_ above for why this must never throw uncaught
+// (an uncaught throw here would just mean the 🧾 link doesn't work for
+// this invoice, which is much lower-stakes than a duplicated invoice,
+// but still worth pruning gracefully rather than losing the whole map).
+function safeSetInvoiceApartmenteryIdsMap_(map) {
+  try {
+    setProp_(PROP_KEY_INVOICE_APT_IDS, map);
+  } catch (err) {
+    Logger.log(`safeSetInvoiceApartmenteryIdsMap_: setProp_ failed (${err.message}) — pruning invoice_apt_ids_v1 and retrying`);
+    pruneInvoiceApartmenteryIdsMap_(map);
+    setProp_(PROP_KEY_INVOICE_APT_IDS, map);
+  }
+}
+
+function pruneInvoiceApartmenteryIdsMap_(map) {
+  const SAFE_BYTES = 8000;
+  const dated = Object.keys(map).map(key => {
+    const bidPart = String(key).split('#')[0];
+    const n = parseInt(bidPart, 10);
+    return { key: key, sortKey: isNaN(n) ? 0 : n };
+  });
+  dated.sort((a, b) => a.sortKey - b.sortKey);
+  let removed = 0;
+  let i = 0;
+  while (Utilities.newBlob(JSON.stringify(map)).getBytes().length > SAFE_BYTES && i < dated.length) {
+    delete map[dated[i].key];
+    removed++;
+    i++;
+  }
+  Logger.log(`pruneInvoiceApartmenteryIdsMap_: removed ${removed} old entries from invoice_apt_ids_v1`);
 }
 
 function setBookingNote(resId, note) {
