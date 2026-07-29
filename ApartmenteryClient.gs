@@ -845,6 +845,45 @@ function createApartmenteryInvoice(branchId, unitId, bookingId, rentalPrice, dat
 }
 
 /**
+ * Best-effort scrape for an invoice ID that was already created for this
+ * booking BEFORE invoice_apt_ids_v1 existed to persist it (see backfill
+ * discussion 2026-07-30). Reuses the same booking/edit page the
+ * createApartmenteryInvoice failure-diagnostic above already GETs — that
+ * page is confirmed to load (HTTP 200) for any valid branch/unit/booking
+ * combo, and apartmentery's booking edit page links to its invoice(s) if
+ * one already exists. Returns the numeric invoiceId of the first invoice
+ * link found, or null if the page has none (booking truly has no invoice
+ * yet) or the page couldn't be read at all.
+ *
+ * Deliberately read-only (GET only) — never creates or touches anything.
+ *
+ * @param {string} branchId
+ * @param {string} unitId
+ * @param {string} bookingId
+ * @returns {string|null}
+ */
+function getExistingApartmenteryInvoiceId_(branchId, unitId, bookingId) {
+  const editPath = `/user/branch/${branchId}/unit/${unitId}/booking/${bookingId}/edit`;
+  let response;
+  try {
+    response = _apartmenteryFetch_(editPath, { method: 'get' });
+  } catch (err) {
+    if (isApartmenterySessionExpiredError(err)) throw err;
+    Logger.log(`getExistingApartmenteryInvoiceId_: fetch failed for booking ${bookingId}: ${err.message}`);
+    return null;
+  }
+  if (response.getResponseCode() !== 200) {
+    Logger.log(`getExistingApartmenteryInvoiceId_: booking ${bookingId} edit page returned ` +
+      `HTTP ${response.getResponseCode()}, can't scrape invoice ID.`);
+    return null;
+  }
+  // Match .../invoice/{digits} — deliberately digit-only so it never
+  // matches the "invoice/add" link itself, only a link to a real invoice.
+  const match = response.getContentText().match(/\/invoice\/(\d+)(?!\d)/);
+  return match ? match[1] : null;
+}
+
+/**
  * Creates a receipt for an existing invoice.
  * Pre-fills electPrice/waterPrice/vat/withholding from the invoice itself
  * (GET the receipt/add form first) rather than recomputing them.

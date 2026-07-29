@@ -570,6 +570,86 @@ function autoCreateApartmenteryInvoicesAndReceipts() {
 }
 
 /**
+ * Backfill for invoices created BEFORE invoice_apt_ids_v1 existed to
+ * persist the Apartmentery invoiceId (added 2026-07-30). Those invoices
+ * are already marked done (invoice_done_v1) but have no entry in
+ * invoice_apt_ids_v1, so their 🧾 button / NET amount link in the-loft-admin
+ * has nothing to link to and looks unclickable — reported by Nathan same day.
+ *
+ * Read-only against Apartmentery (GET only, via getExistingApartmenteryInvoiceId_)
+ * — never creates or touches an invoice, only looks up the ID of one that
+ * already exists. Same matching logic as autoCreateApartmenteryInvoicesAndReceipts
+ * (matchKeys -> resId -> Apartmentery bookingId), but only for inv.done rows
+ * that are still missing an apartmenteryInvoiceId.
+ *
+ * Same ~5 min runtime budget as backfillMissingApartmenteryBookings, for the
+ * same reason (many sequential HTTP calls vs. Apps Script's 6-min limit) —
+ * safe to re-run, only touches rows still missing an ID.
+ */
+function backfillApartmenteryInvoiceIds() {
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const todayStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
+
+  const bookingItems = getBookingToAdd_(ss, todayStr);
+  const invoiceItems = getInvoiceToCreate_(ss, todayStr);
+
+  const keyToResId = {};
+  bookingItems.forEach(b => {
+    const aptId = getApartmenteryBookingId_(b.resId);
+    if (!aptId) return;
+    (b.matchKeys || []).forEach(k => { if (!keyToResId[k]) keyToResId[k] = { resId: b.resId, guest: b.guest }; });
+  });
+
+  const result = { filled: 0, notFound: 0, skipped: 0, sessionExpired: false, timedOut: false, errors: [] };
+  const startTime = Date.now();
+  const MAX_RUNTIME_MS = 5 * 60 * 1000;
+
+  for (const inv of invoiceItems) {
+    if (!inv.done || inv.apartmenteryInvoiceId) { result.skipped++; continue; }
+    if (String(inv.room).indexOf('ไม่ทราบห้อง') >= 0) { result.skipped++; continue; }
+
+    if (Date.now() - startTime > MAX_RUNTIME_MS) { result.timedOut = true; break; }
+
+    let resId = null;
+    for (const k of (inv.matchKeys || [])) {
+      const candidate = keyToResId[k];
+      if (!candidate) continue;
+      if (!_namesMatchIgnoringOrder_(inv.guest, candidate.guest) &&
+          !_namesMatchIgnoringOrder_(candidate.guest, inv.guest)) {
+        continue;
+      }
+      resId = candidate.resId;
+      break;
+    }
+    if (!resId) { result.skipped++; continue; }
+
+    const aptBookingId = getApartmenteryBookingId_(resId);
+    if (!aptBookingId) { result.skipped++; continue; }
+
+    const unit = getApartmenteryUnitForRoom(inv.room);
+    if (!unit) { result.skipped++; continue; }
+
+    try {
+      const invoiceId = getExistingApartmenteryInvoiceId_(unit.branchId, unit.unitId, aptBookingId);
+      if (!invoiceId) { result.notFound++; continue; }
+      setInvoiceApartmenteryIds(inv.invoiceKey, aptBookingId, invoiceId);
+      result.filled++;
+    } catch (err) {
+      if (isApartmenterySessionExpiredError(err)) {
+        result.sessionExpired = true;
+        break;
+      }
+      result.errors.push({ invoiceKey: inv.invoiceKey, guest: inv.guest, room: inv.room, resId: resId, aptBookingId: aptBookingId, error: err.message });
+    }
+  }
+
+  Logger.log(`backfillApartmenteryInvoiceIds: filled=${result.filled} notFound=${result.notFound} ` +
+    `skipped=${result.skipped} sessionExpired=${result.sessionExpired} timedOut=${result.timedOut} ` +
+    `errors=${result.errors.length}`);
+  return result;
+}
+
+/**
  * Backfill for EXISTING rows that already have no apartmentery bookingId
  * but will NEVER be picked up by autoCreateApartmenteryBookings(), because
  * that function skips any resId already marked done in booking_done_v1 —
