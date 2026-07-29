@@ -582,11 +582,19 @@ function autoCreateApartmenteryInvoicesAndReceipts() {
  * (matchKeys -> resId -> Apartmentery bookingId), but only for inv.done rows
  * that are still missing an apartmenteryInvoiceId.
  *
- * Same ~5 min runtime budget as backfillMissingApartmenteryBookings, for the
- * same reason (many sequential HTTP calls vs. Apps Script's 6-min limit) —
- * safe to re-run, only touches rows still missing an ID.
+ * @param {number} [maxItems] Caps how many ELIGIBLE invoices get examined
+ *   this call (not just skipped ones, which are free/instant). Omit or 0
+ *   for no cap — used when run directly from the Apps Script editor, which
+ *   isn't subject to a browser connection timeout. The web-triggered GET
+ *   action (see doGet_ 'backfillApartmenteryInvoiceIds') always passes a
+ *   small default so a single mobile tap finishes well inside Safari's
+ *   ~60s connection timeout — 2026-07-30, Nathan's phone got "server
+ *   stopped responding" running the uncapped version, because Safari gave
+ *   up waiting long before the script's own 5-min budget would have.
+ *   result.remaining tells you how many are still left — call again
+ *   (same URL) to keep going; it only ever touches rows still missing an ID.
  */
-function backfillApartmenteryInvoiceIds() {
+function backfillApartmenteryInvoiceIds(maxItems) {
   const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
   const todayStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
 
@@ -600,15 +608,19 @@ function backfillApartmenteryInvoiceIds() {
     (b.matchKeys || []).forEach(k => { if (!keyToResId[k]) keyToResId[k] = { resId: b.resId, guest: b.guest }; });
   });
 
-  const result = { filled: 0, notFound: 0, skipped: 0, sessionExpired: false, timedOut: false, errors: [] };
+  const eligible = invoiceItems.filter(inv =>
+    inv.done && !inv.apartmenteryInvoiceId && String(inv.room).indexOf('ไม่ทราบห้อง') < 0
+  );
+  const cap = maxItems && maxItems > 0 ? maxItems : Infinity;
+
+  const result = { filled: 0, notFound: 0, skipped: 0, examined: 0, remaining: 0, sessionExpired: false, timedOut: false, errors: [] };
   const startTime = Date.now();
   const MAX_RUNTIME_MS = 5 * 60 * 1000;
 
-  for (const inv of invoiceItems) {
-    if (!inv.done || inv.apartmenteryInvoiceId) { result.skipped++; continue; }
-    if (String(inv.room).indexOf('ไม่ทราบห้อง') >= 0) { result.skipped++; continue; }
-
+  for (const inv of eligible) {
+    if (result.examined >= cap) break;
     if (Date.now() - startTime > MAX_RUNTIME_MS) { result.timedOut = true; break; }
+    result.examined++;
 
     let resId = null;
     for (const k of (inv.matchKeys || [])) {
@@ -643,9 +655,11 @@ function backfillApartmenteryInvoiceIds() {
     }
   }
 
-  Logger.log(`backfillApartmenteryInvoiceIds: filled=${result.filled} notFound=${result.notFound} ` +
-    `skipped=${result.skipped} sessionExpired=${result.sessionExpired} timedOut=${result.timedOut} ` +
-    `errors=${result.errors.length}`);
+  result.remaining = eligible.length - result.examined;
+
+  Logger.log(`backfillApartmenteryInvoiceIds: examined=${result.examined} filled=${result.filled} ` +
+    `notFound=${result.notFound} skipped=${result.skipped} remaining=${result.remaining} ` +
+    `sessionExpired=${result.sessionExpired} timedOut=${result.timedOut} errors=${result.errors.length}`);
   return result;
 }
 

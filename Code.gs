@@ -598,10 +598,15 @@ function doGet_(e) {
 
   // Read-only against Apartmentery (see getExistingApartmenteryInvoiceId_) —
   // exposed as a GET action so it can be triggered from a plain URL on
-  // mobile, without opening the Apps Script editor. Can take up to ~5 min
-  // (same runtime budget as the function itself); safe to re-run.
+  // mobile, without opening the Apps Script editor. Defaults to a small
+  // batch (15) so a single tap finishes well inside Safari's mobile
+  // connection timeout (~60s) instead of the uncapped ~5 min budget —
+  // 2026-07-30, Nathan's phone got "server stopped responding" without
+  // this cap. Pass ?limit= to override; call again to keep going, using
+  // the returned "remaining" count to know when you're done.
   if (action === 'backfillApartmenteryInvoiceIds') {
-    return jsonResponse_(backfillApartmenteryInvoiceIds());
+    const limit = e.parameter.limit ? parseInt(e.parameter.limit, 10) : 15;
+    return jsonResponse_(backfillApartmenteryInvoiceIds(limit));
   }
 
   // Default: serve HTML webapp
