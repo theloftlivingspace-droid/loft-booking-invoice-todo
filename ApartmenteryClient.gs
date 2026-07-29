@@ -863,23 +863,36 @@ function createApartmenteryInvoice(branchId, unitId, bookingId, rentalPrice, dat
  * @returns {string|null}
  */
 function getExistingApartmenteryInvoiceId_(branchId, unitId, bookingId) {
-  const editPath = `/user/branch/${branchId}/unit/${unitId}/booking/${bookingId}/edit`;
+  // NOT /edit — confirmed via execution log 2026-07-30 that /edit returns
+  // HTTP 400 for every booking tested here, which makes sense: every one of
+  // these bookings already HAS an invoice (that's the whole reason this
+  // function is being called), and Apartmentery apparently disables editing
+  // a booking once it's been invoiced. The plain (non-edit) booking detail
+  // page is what a real invoice URL is nested under — confirmed against
+  // Nathan's own example: https://apartmentery.com/user/branch/6801/unit/
+  // 163865/booking/325196/invoice/2769730 — so that page is expected to
+  // list/link the invoice the same way.
+  const viewPath = `/user/branch/${branchId}/unit/${unitId}/booking/${bookingId}`;
   let response;
   try {
-    response = _apartmenteryFetch_(editPath, { method: 'get' });
+    response = _apartmenteryFetch_(viewPath, { method: 'get' });
   } catch (err) {
     if (isApartmenterySessionExpiredError(err)) throw err;
     Logger.log(`getExistingApartmenteryInvoiceId_: fetch failed for booking ${bookingId}: ${err.message}`);
     return null;
   }
   if (response.getResponseCode() !== 200) {
-    Logger.log(`getExistingApartmenteryInvoiceId_: booking ${bookingId} edit page returned ` +
+    Logger.log(`getExistingApartmenteryInvoiceId_: booking ${bookingId} detail page returned ` +
       `HTTP ${response.getResponseCode()}, can't scrape invoice ID.`);
     return null;
   }
   // Match .../invoice/{digits} — deliberately digit-only so it never
   // matches the "invoice/add" link itself, only a link to a real invoice.
   const match = response.getContentText().match(/\/invoice\/(\d+)(?!\d)/);
+  if (!match) {
+    Logger.log(`getExistingApartmenteryInvoiceId_: booking ${bookingId} detail page loaded ` +
+      `(HTTP 200) but no /invoice/{digits} link found in it.`);
+  }
   return match ? match[1] : null;
 }
 
