@@ -551,6 +551,10 @@ function doGet_(e) {
     return jsonResponse_(getDashboardData());
   }
 
+  if (action === 'getRevenueDashboard') {
+    return jsonResponse_({ ok: true, ledger: getRevenueLedger_() });
+  }
+
   if (action === 'getRoomStatus') {
     return jsonResponse_(getRoomStatus_());
   }
@@ -708,6 +712,46 @@ function getDashboardData() {
     invoice: invoice,
     pendingMatch: getPendingMatchPayouts_(ss),
   };
+}
+
+/* ============================================================
+ *  Revenue dashboard (the-loft-admin "สรุปรายรับ" tab) — reads the
+ *  Bank_Ledger tab of the SAME spreadsheet (SOURCE_SHEET_ID ===
+ *  payout-income-log's MASTER_SHEET_ID). Bank_Ledger is built by
+ *  payout-income-log's rebuildBankLedger()/buildDashboardTab(), but any
+ *  script with access to the spreadsheet can read it — no cross-project
+ *  call needed. Each row: date, ota (raw "SCB" — real OTA attribution is
+ *  parsed client-side from `status`, e.g. "✅ Matched - Airbnb payout"),
+ *  bookingId, guest, room, checkin, checkout, nights, gross, commission,
+ *  net, status. Defensive: returns an empty ledger (not an error) if the
+ *  tab doesn't exist yet or is empty, since that's a legitimate "no data
+ *  synced yet" state, not a bug.
+ * ============================================================ */
+function getRevenueLedger_() {
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const sheetL = ss.getSheetByName('Bank_Ledger');
+  if (!sheetL || sheetL.getLastRow() < 2) return [];
+
+  const dataL = sheetL.getDataRange().getValues();
+  const ledger = [];
+  const seen = {};
+  for (let i = 1; i < dataL.length; i++) {
+    const row = dataL[i];
+    const bid = String(row[2] || '').trim();
+    if (!bid || seen[bid]) continue;
+    seen[bid] = true;
+    ledger.push({
+      date: String(row[0] || ''), ota: String(row[1] || ''), bookingId: bid,
+      guest: String(row[4] || ''), room: String(row[5] || ''),
+      checkin: String(row[6] || ''), checkout: String(row[7] || ''),
+      nights: parseInt(row[8]) || 0,
+      gross: parseFloat(String(row[9]).replace(/,/g, '')) || 0,
+      commission: parseFloat(String(row[10]).replace(/,/g, '')) || 0,
+      net: parseFloat(String(row[11]).replace(/,/g, '')) || 0,
+      status: String(row[12] || ''),
+    });
+  }
+  return ledger;
 }
 
 /* ============================================================
