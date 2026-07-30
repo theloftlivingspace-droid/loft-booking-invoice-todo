@@ -616,6 +616,12 @@ function doGet_(e) {
     return jsonResponse_(auditInvoiceApartmenteryIdsForDuplicates());
   }
 
+  // Also fully read/write-local-only (no Apartmentery calls) — safe to
+  // trigger from mobile the same way.
+  if (action === 'clearAmbiguousInvoiceApartmenteryIds') {
+    return jsonResponse_(clearAmbiguousInvoiceApartmenteryIds());
+  }
+
   // Default: serve HTML webapp
   const template = HtmlService.createTemplateFromFile('Index');
   return template.evaluate()

@@ -769,6 +769,49 @@ function auditInvoiceApartmenteryIdsForDuplicates() {
 }
 
 /**
+ * Repair companion to auditInvoiceApartmenteryIdsForDuplicates(): removes
+ * the invoice_apt_ids_v1 entry for EVERY invoiceKey the audit flags (i.e.
+ * every invoiceKey sharing an invoiceId with at least one other
+ * invoiceKey — the fingerprint of the pre-2026-07-30 backfill bug).
+ *
+ * Deliberately clears ALL claimants in a duplicate group, not just the
+ * "extra" ones — there's no reliable way to tell which claimant actually
+ * owns the invoiceId without amount-matching against Apartmentery (not yet
+ * built, since the invoice-list page's HTML structure for amounts hasn't
+ * been confirmed). Clearing is the safe move: those invoiceKeys go back to
+ * "unresolved" and the-loft-admin already falls back to linking the
+ * booking's invoice-list page instead of a specific (possibly wrong)
+ * invoice — see getApartmenteryInvoiceListUrl in BookingInvoiceTodo.tsx.
+ * They'll then also become eligible again for backfillApartmenteryInvoiceIds(),
+ * which will correctly report them as "ambiguous" rather than re-guessing.
+ *
+ * No Apartmentery calls at all — purely a local Script Properties cleanup,
+ * so it's instant and safe to run repeatedly (does nothing once the audit
+ * comes back clean).
+ */
+function clearAmbiguousInvoiceApartmenteryIds() {
+  const audit = auditInvoiceApartmenteryIdsForDuplicates();
+  const aptIdsMap = getProp_(PROP_KEY_INVOICE_APT_IDS);
+  let cleared = 0;
+
+  audit.duplicates.forEach(d => {
+    d.invoiceKeys.forEach(k => {
+      if (aptIdsMap[k.invoiceKey]) {
+        delete aptIdsMap[k.invoiceKey];
+        cleared++;
+      }
+    });
+  });
+
+  if (cleared > 0) {
+    safeSetInvoiceApartmenteryIdsMap_(aptIdsMap);
+  }
+
+  Logger.log(`clearAmbiguousInvoiceApartmenteryIds: cleared ${cleared} invoiceKey entries across ${audit.duplicateCount} ambiguous invoiceId group(s)`);
+  return { cleared: cleared, groupsCleared: audit.duplicateCount };
+}
+
+/**
  * Backfill for EXISTING rows that already have no apartmentery bookingId
  * but will NEVER be picked up by autoCreateApartmenteryBookings(), because
  * that function skips any resId already marked done in booking_done_v1 —
