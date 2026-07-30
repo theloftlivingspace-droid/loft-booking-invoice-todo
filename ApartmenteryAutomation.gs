@@ -576,11 +576,23 @@ function autoCreateApartmenteryInvoicesAndReceipts() {
  * invoice_apt_ids_v1, so their 🧾 button / NET amount link in the-loft-admin
  * has nothing to link to and looks unclickable — reported by Nathan same day.
  *
- * Read-only against Apartmentery (GET only, via getExistingApartmenteryInvoiceId_)
- * — never creates or touches an invoice, only looks up the ID of one that
- * already exists. Same matching logic as autoCreateApartmenteryInvoicesAndReceipts
+ * Read-only against Apartmentery (GET only, via getExistingApartmenteryInvoiceIds_)
+ * — never creates or touches an invoice, only looks up the ID(s) of ones that
+ * already exist. Same matching logic as autoCreateApartmenteryInvoicesAndReceipts
  * (matchKeys -> resId -> Apartmentery bookingId), but only for inv.done rows
  * that are still missing an apartmenteryInvoiceId.
+ *
+ * MULTI-INVOICE SAFETY (fixed 2026-07-30, flagged by Nathan): a single
+ * Apartmentery booking can have more than one invoice (split-payout
+ * bookings with a separate invoice per entry, or an original + adjustment
+ * invoice). The scraper returns ALL invoice IDs found on that booking's
+ * invoice-list page; this function only auto-assigns an ID to an
+ * invoiceKey when EXACTLY ONE unassigned candidate remains for that
+ * booking (after excluding IDs already recorded — persisted from an
+ * earlier run/forward-creation, or assigned earlier in this same run).
+ * If more than one candidate remains with no way to tell them apart, it's
+ * left unassigned and reported under result.ambiguous rather than guessed
+ * — a wrong link would be worse than no link.
  *
  * @param {number} [maxItems] Caps how many ELIGIBLE invoices get examined
  *   this call (not just skipped ones, which are free/instant). Omit or 0
@@ -608,14 +620,28 @@ function backfillApartmenteryInvoiceIds(maxItems) {
     (b.matchKeys || []).forEach(k => { if (!keyToResId[k]) keyToResId[k] = { resId: b.resId, guest: b.guest }; });
   });
 
+  // Every invoiceId already on record anywhere (forward-created or backfilled
+  // in a previous run), regardless of which invoiceKey it belongs to — used
+  // to eliminate candidates that are already "claimed" by another invoice.
+  const alreadyAssignedIds = {};
+  const persistedAptIds = getProp_(PROP_KEY_INVOICE_APT_IDS);
+  Object.keys(persistedAptIds).forEach(k => {
+    const parts = String(persistedAptIds[k] || '').split(':');
+    if (parts[1]) alreadyAssignedIds[parts[1]] = true;
+  });
+
   const eligible = invoiceItems.filter(inv =>
     inv.done && !inv.apartmenteryInvoiceId && String(inv.room).indexOf('ไม่ทราบห้อง') < 0
   );
   const cap = maxItems && maxItems > 0 ? maxItems : Infinity;
 
-  const result = { filled: 0, notFound: 0, skipped: 0, examined: 0, remaining: 0, sessionExpired: false, timedOut: false, errors: [] };
+  const result = {
+    filled: 0, notFound: 0, skipped: 0, ambiguous: 0, examined: 0, remaining: 0,
+    sessionExpired: false, timedOut: false, errors: [], ambiguousDetails: [],
+  };
   const startTime = Date.now();
   const MAX_RUNTIME_MS = 5 * 60 * 1000;
+  const scrapeCache = {}; // aptBookingId -> string[] of invoice IDs found on its list page
 
   for (const inv of eligible) {
     if (result.examined >= cap) break;
@@ -642,9 +668,25 @@ function backfillApartmenteryInvoiceIds(maxItems) {
     if (!unit) { result.skipped++; continue; }
 
     try {
-      const invoiceId = getExistingApartmenteryInvoiceId_(unit.branchId, unit.unitId, aptBookingId);
-      if (!invoiceId) { result.notFound++; continue; }
+      if (!(aptBookingId in scrapeCache)) {
+        scrapeCache[aptBookingId] = getExistingApartmenteryInvoiceIds_(unit.branchId, unit.unitId, aptBookingId);
+      }
+      const candidates = scrapeCache[aptBookingId].filter(id => !alreadyAssignedIds[id]);
+
+      if (candidates.length === 0) { result.notFound++; continue; }
+
+      if (candidates.length > 1) {
+        result.ambiguous++;
+        result.ambiguousDetails.push({
+          invoiceKey: inv.invoiceKey, guest: inv.guest, room: inv.room,
+          aptBookingId: aptBookingId, candidateInvoiceIds: candidates,
+        });
+        continue;
+      }
+
+      const invoiceId = candidates[0];
       setInvoiceApartmenteryIds(inv.invoiceKey, aptBookingId, invoiceId);
+      alreadyAssignedIds[invoiceId] = true; // so a later eligible key for the same booking this run doesn't re-claim it
       result.filled++;
     } catch (err) {
       if (isApartmenterySessionExpiredError(err)) {
@@ -658,8 +700,9 @@ function backfillApartmenteryInvoiceIds(maxItems) {
   result.remaining = eligible.length - result.examined;
 
   Logger.log(`backfillApartmenteryInvoiceIds: examined=${result.examined} filled=${result.filled} ` +
-    `notFound=${result.notFound} skipped=${result.skipped} remaining=${result.remaining} ` +
-    `sessionExpired=${result.sessionExpired} timedOut=${result.timedOut} errors=${result.errors.length}`);
+    `notFound=${result.notFound} skipped=${result.skipped} ambiguous=${result.ambiguous} ` +
+    `remaining=${result.remaining} sessionExpired=${result.sessionExpired} timedOut=${result.timedOut} ` +
+    `errors=${result.errors.length}`);
   return result;
 }
 

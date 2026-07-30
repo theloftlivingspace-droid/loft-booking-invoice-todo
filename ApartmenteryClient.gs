@@ -845,53 +845,63 @@ function createApartmenteryInvoice(branchId, unitId, bookingId, rentalPrice, dat
 }
 
 /**
- * Best-effort scrape for an invoice ID that was already created for this
- * booking BEFORE invoice_apt_ids_v1 existed to persist it (see backfill
- * discussion 2026-07-30). Reuses the same booking/edit page the
- * createApartmenteryInvoice failure-diagnostic above already GETs — that
- * page is confirmed to load (HTTP 200) for any valid branch/unit/booking
- * combo, and apartmentery's booking edit page links to its invoice(s) if
- * one already exists. Returns the numeric invoiceId of the first invoice
- * link found, or null if the page has none (booking truly has no invoice
- * yet) or the page couldn't be read at all.
+ * Best-effort scrape for the invoice ID(s) already created for this booking
+ * BEFORE invoice_apt_ids_v1 existed to persist them (see backfill
+ * discussion 2026-07-30). Fetches the booking's invoice-list page
+ * (.../booking/{id}/invoice — confirmed 2026-07-30 by Nathan directly via
+ * the "บริหารใบแจ้งหนี้" / Manage Invoice button; neither /edit nor the
+ * plain booking page worked, see git history) and returns EVERY invoice ID
+ * linked from it, deduped, in page order.
+ *
+ * Returns an array (possibly empty, never null) — a booking can have more
+ * than one invoice (e.g. a split-payout booking with a separate invoice per
+ * guest/entry, or an original + adjustment invoice), and the caller MUST
+ * disambiguate which ID belongs to which invoiceKey rather than assuming
+ * index 0 — see fillMultiInvoiceCandidates_ in ApartmenteryAutomation.gs.
+ * (Bug fixed 2026-07-30: the original single-ID version always returned
+ * only the first link found, so multi-invoice bookings all got wired to
+ * the same wrong invoiceId.)
  *
  * Deliberately read-only (GET only) — never creates or touches anything.
  *
  * @param {string} branchId
  * @param {string} unitId
  * @param {string} bookingId
- * @returns {string|null}
+ * @returns {string[]}
  */
-function getExistingApartmenteryInvoiceId_(branchId, unitId, bookingId) {
-  // Confirmed 2026-07-30 by Nathan directly: tapping "บริหารใบแจ้งหนี้"
-  // (Manage Invoice) on a booking's page in Apartmentery goes to
-  // .../booking/{id}/invoice — this is the actual invoice list page for
-  // the booking, and is what should list/link the real invoice. Neither
-  // /edit (400s once invoiced) nor the plain booking page (loads fine but
-  // has no invoice link in it) worked — see git history for those two
-  // failed attempts before this one.
+function getExistingApartmenteryInvoiceIds_(branchId, unitId, bookingId) {
   const listPath = `/user/branch/${branchId}/unit/${unitId}/booking/${bookingId}/invoice`;
   let response;
   try {
     response = _apartmenteryFetch_(listPath, { method: 'get' });
   } catch (err) {
     if (isApartmenterySessionExpiredError(err)) throw err;
-    Logger.log(`getExistingApartmenteryInvoiceId_: fetch failed for booking ${bookingId}: ${err.message}`);
-    return null;
+    Logger.log(`getExistingApartmenteryInvoiceIds_: fetch failed for booking ${bookingId}: ${err.message}`);
+    return [];
   }
   if (response.getResponseCode() !== 200) {
-    Logger.log(`getExistingApartmenteryInvoiceId_: booking ${bookingId} invoice-list page returned ` +
-      `HTTP ${response.getResponseCode()}, can't scrape invoice ID.`);
-    return null;
+    Logger.log(`getExistingApartmenteryInvoiceIds_: booking ${bookingId} invoice-list page returned ` +
+      `HTTP ${response.getResponseCode()}, can't scrape invoice ID(s).`);
+    return [];
   }
   // Match .../invoice/{digits} — deliberately digit-only so it never
-  // matches the "invoice/add" link itself, only a link to a real invoice.
-  const match = response.getContentText().match(/\/invoice\/(\d+)(?!\d)/);
-  if (!match) {
-    Logger.log(`getExistingApartmenteryInvoiceId_: booking ${bookingId} invoice-list page loaded ` +
+  // matches the "invoice/add" link itself, only links to real invoices.
+  // Dedup while preserving page order (the same href can legitimately
+  // appear more than once in a page's markup, e.g. both a row link and an
+  // action-button link pointing at the same invoice).
+  const html = response.getContentText();
+  const re = /\/invoice\/(\d+)(?!\d)/g;
+  const ids = [];
+  const seen = {};
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    if (!seen[m[1]]) { seen[m[1]] = true; ids.push(m[1]); }
+  }
+  if (ids.length === 0) {
+    Logger.log(`getExistingApartmenteryInvoiceIds_: booking ${bookingId} invoice-list page loaded ` +
       `(HTTP 200) but no /invoice/{digits} link found in it.`);
   }
-  return match ? match[1] : null;
+  return ids;
 }
 
 /**
