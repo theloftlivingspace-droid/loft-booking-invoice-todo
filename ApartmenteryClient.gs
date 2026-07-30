@@ -845,68 +845,80 @@ function createApartmenteryInvoice(branchId, unitId, bookingId, rentalPrice, dat
 }
 
 /**
- * Best-effort scrape for the invoice ID(s) already created for this booking
- * BEFORE invoice_apt_ids_v1 existed to persist them (see backfill
- * discussion 2026-07-30). Fetches the booking's invoice-list page
- * (.../booking/{id}/invoice — confirmed 2026-07-30 by Nathan directly via
- * the "บริหารใบแจ้งหนี้" / Manage Invoice button; neither /edit nor the
- * plain booking page worked, see git history) and returns EVERY invoice ID
- * linked from it, deduped, in page order.
+ * Scrape for the invoice(s) already created for this booking BEFORE
+ * invoice_apt_ids_v1 existed to persist them (see backfill discussion
+ * 2026-07-30). Fetches the booking's invoice-list page
+ * (.../booking/{id}/invoice — confirmed 2026-07-30 by Nathan via the
+ * "บริหารใบแจ้งหนี้" / Manage Invoice button) and returns EVERY
+ * {invoiceId, amount} pair found, in page order (newest first).
+ *
+ * Row markup confirmed 2026-07-30 against a real 7-invoice booking
+ * (311988, room 300) via debugFetchInvoiceListHtml_:
+ *   <tr>
+ *     <td class="text-center">IVB068012604220002</td>            invoice no.
+ *     <td class="text-center">22 เม.ย. 2026</td>                 issue date
+ *     <td class="text-center">22 เม.ย. 2026</td>                 due date
+ *     <td class="text-center">2,000.00</td>                      <- amount
+ *     <td class="text-center">...status...</td>
+ *     <td><a href=".../invoice/2632402" class="btn btn-info">ดูใบแจ้งหนี้</a>
+ *         <a href=".../invoice/2632402/receipt" ...>ดูใบเสร็จรับเงิน</a></td>
+ *   </tr>
+ * The amount td is the only <td class="text-center">...</td> in a row
+ * whose content is a bare "#,###.##" number, so it's unambiguous. Split on
+ * <tr> to isolate rows; the header row (built from <th>, not <td>) simply
+ * fails both regexes and is skipped naturally, no special-casing needed.
  *
  * Returns an array (possibly empty, never null) — a booking can have more
- * than one invoice (e.g. a split-payout booking with a separate invoice per
- * guest/entry, or an original + adjustment invoice), and the caller MUST
- * disambiguate which ID belongs to which invoiceKey rather than assuming
- * index 0 — see fillMultiInvoiceCandidates_ in ApartmenteryAutomation.gs.
- * (Bug fixed 2026-07-30: the original single-ID version always returned
- * only the first link found, so multi-invoice bookings all got wired to
- * the same wrong invoiceId.)
+ * than one invoice (split-payout bookings with a separate invoice per
+ * entry, or an original + adjustment invoice). The caller uses `amount`
+ * to match against each invoiceKey's own net amount rather than assuming
+ * page order — see backfillApartmenteryInvoiceIds in
+ * ApartmenteryAutomation.gs. (Bug fixed 2026-07-30: an earlier ID-only
+ * version always returned just the first link found, wiring every
+ * invoiceKey on a multi-invoice booking to the same wrong ID.)
  *
  * Deliberately read-only (GET only) — never creates or touches anything.
  *
  * @param {string} branchId
  * @param {string} unitId
  * @param {string} bookingId
- * @returns {string[]}
+ * @returns {{invoiceId: string, amount: number}[]}
  */
-function getExistingApartmenteryInvoiceIds_(branchId, unitId, bookingId) {
+function getExistingApartmenteryInvoices_(branchId, unitId, bookingId) {
   const listPath = `/user/branch/${branchId}/unit/${unitId}/booking/${bookingId}/invoice`;
   let response;
   try {
     response = _apartmenteryFetch_(listPath, { method: 'get' });
   } catch (err) {
     if (isApartmenterySessionExpiredError(err)) throw err;
-    Logger.log(`getExistingApartmenteryInvoiceIds_: fetch failed for booking ${bookingId}: ${err.message}`);
+    Logger.log(`getExistingApartmenteryInvoices_: fetch failed for booking ${bookingId}: ${err.message}`);
     return [];
   }
   if (response.getResponseCode() !== 200) {
-    Logger.log(`getExistingApartmenteryInvoiceIds_: booking ${bookingId} invoice-list page returned ` +
-      `HTTP ${response.getResponseCode()}, can't scrape invoice ID(s).`);
+    Logger.log(`getExistingApartmenteryInvoices_: booking ${bookingId} invoice-list page returned ` +
+      `HTTP ${response.getResponseCode()}, can't scrape invoice(s).`);
     return [];
   }
-  // Match .../invoice/{digits} — deliberately digit-only so it never
-  // matches the "invoice/add" link itself, only links to real invoices.
-  // Dedup while preserving page order (the same href can legitimately
-  // appear more than once in a page's markup, e.g. both a row link and an
-  // action-button link pointing at the same invoice).
   const html = response.getContentText();
-  const re = /\/invoice\/(\d+)(?!\d)/g;
-  const ids = [];
-  const seen = {};
-  let m;
-  while ((m = re.exec(html)) !== null) {
-    if (!seen[m[1]]) { seen[m[1]] = true; ids.push(m[1]); }
+  const rows = html.split(/<tr>/);
+  const invoices = [];
+  rows.forEach(row => {
+    const idMatch = row.match(/\/invoice\/(\d+)"/);
+    const amountMatch = row.match(/<td class="text-center">\s*([\d,]+\.\d{2})\s*<\/td>/);
+    if (idMatch && amountMatch) {
+      invoices.push({ invoiceId: idMatch[1], amount: parseFloat(amountMatch[1].replace(/,/g, '')) });
+    }
+  });
+  if (invoices.length === 0) {
+    Logger.log(`getExistingApartmenteryInvoices_: booking ${bookingId} invoice-list page loaded ` +
+      `(HTTP 200) but parsed 0 invoice rows from it.`);
   }
-  if (ids.length === 0) {
-    Logger.log(`getExistingApartmenteryInvoiceIds_: booking ${bookingId} invoice-list page loaded ` +
-      `(HTTP 200) but no /invoice/{digits} link found in it.`);
-  }
-  return ids;
+  return invoices;
 }
 
 /**
  * One-off debug helper (2026-07-30) — returns the RAW HTML of a booking's
- * invoice-list page, uninterpreted. Purpose: getExistingApartmenteryInvoiceIds_
+ * invoice-list page, uninterpreted. Purpose: getExistingApartmenteryInvoices_
  * can already find invoice IDs on this page, but for multi-invoice bookings
  * there's no way to tell which ID belongs to which invoiceKey without also
  * capturing each row's ยอดรวม (บาท) amount — and guessing that markup

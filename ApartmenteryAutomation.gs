@@ -576,7 +576,7 @@ function autoCreateApartmenteryInvoicesAndReceipts() {
  * invoice_apt_ids_v1, so their 🧾 button / NET amount link in the-loft-admin
  * has nothing to link to and looks unclickable — reported by Nathan same day.
  *
- * Read-only against Apartmentery (GET only, via getExistingApartmenteryInvoiceIds_)
+ * Read-only against Apartmentery (GET only, via getExistingApartmenteryInvoices_)
  * — never creates or touches an invoice, only looks up the ID(s) of ones that
  * already exist. Same matching logic as autoCreateApartmenteryInvoicesAndReceipts
  * (matchKeys -> resId -> Apartmentery bookingId), but only for inv.done rows
@@ -585,14 +585,16 @@ function autoCreateApartmenteryInvoicesAndReceipts() {
  * MULTI-INVOICE SAFETY (fixed 2026-07-30, flagged by Nathan): a single
  * Apartmentery booking can have more than one invoice (split-payout
  * bookings with a separate invoice per entry, or an original + adjustment
- * invoice). The scraper returns ALL invoice IDs found on that booking's
- * invoice-list page; this function only auto-assigns an ID to an
- * invoiceKey when EXACTLY ONE unassigned candidate remains for that
- * booking (after excluding IDs already recorded — persisted from an
- * earlier run/forward-creation, or assigned earlier in this same run).
- * If more than one candidate remains with no way to tell them apart, it's
- * left unassigned and reported under result.ambiguous rather than guessed
- * — a wrong link would be worse than no link.
+ * invoice). The scraper returns every {invoiceId, amount} pair found on
+ * that booking's invoice-list page (confirmed real markup, see
+ * getExistingApartmenteryInvoices_); this function prefers an EXACT
+ * amount match against the invoiceKey's own net amount, which correctly
+ * resolves multi-invoice bookings even when more than one candidate is
+ * still on the table. Falls back to elimination-by-count (after excluding
+ * IDs already recorded elsewhere) only when there's no amount match and
+ * exactly one candidate remains. If it still can't be narrowed to one,
+ * it's left unassigned and reported under result.ambiguous rather than
+ * guessed — a wrong link would be worse than no link.
  *
  * @param {number} [maxItems] Caps how many ELIGIBLE invoices get examined
  *   this call (not just skipped ones, which are free/instant). Omit or 0
@@ -669,22 +671,38 @@ function backfillApartmenteryInvoiceIds(maxItems) {
 
     try {
       if (!(aptBookingId in scrapeCache)) {
-        scrapeCache[aptBookingId] = getExistingApartmenteryInvoiceIds_(unit.branchId, unit.unitId, aptBookingId);
+        scrapeCache[aptBookingId] = getExistingApartmenteryInvoices_(unit.branchId, unit.unitId, aptBookingId);
       }
-      const candidates = scrapeCache[aptBookingId].filter(id => !alreadyAssignedIds[id]);
+      const candidates = scrapeCache[aptBookingId].filter(x => !alreadyAssignedIds[x.invoiceId]);
 
       if (candidates.length === 0) { result.notFound++; continue; }
 
-      if (candidates.length > 1) {
+      // Prefer an exact amount match — resolves multi-invoice bookings
+      // correctly even when more than one candidate is still on the table.
+      // Small epsilon for float rounding; amounts here are always 2dp.
+      const netNum = Number(inv.net);
+      const amountMatches = candidates.filter(x => Math.abs(x.amount - netNum) < 0.01);
+
+      let invoiceId = null;
+      if (amountMatches.length === 1) {
+        invoiceId = amountMatches[0].invoiceId;
+      } else if (amountMatches.length === 0 && candidates.length === 1) {
+        // No amount match, but only one candidate left after excluding
+        // already-claimed IDs — safe by elimination (e.g. amount off by a
+        // rounding/fee difference, but nothing else it could be).
+        invoiceId = candidates[0].invoiceId;
+      } else {
+        // Either 0 candidates matched by amount with >1 candidate still
+        // possible, or >1 candidates share the same amount — can't tell
+        // them apart safely, don't guess.
         result.ambiguous++;
         result.ambiguousDetails.push({
-          invoiceKey: inv.invoiceKey, guest: inv.guest, room: inv.room,
-          aptBookingId: aptBookingId, candidateInvoiceIds: candidates,
+          invoiceKey: inv.invoiceKey, guest: inv.guest, room: inv.room, net: inv.net,
+          aptBookingId: aptBookingId, candidates: candidates,
         });
         continue;
       }
 
-      const invoiceId = candidates[0];
       setInvoiceApartmenteryIds(inv.invoiceKey, aptBookingId, invoiceId);
       alreadyAssignedIds[invoiceId] = true; // so a later eligible key for the same booking this run doesn't re-claim it
       result.filled++;
