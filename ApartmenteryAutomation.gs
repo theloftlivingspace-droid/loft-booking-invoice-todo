@@ -638,12 +638,12 @@ function backfillApartmenteryInvoiceIds(maxItems) {
   const cap = maxItems && maxItems > 0 ? maxItems : Infinity;
 
   const result = {
-    filled: 0, notFound: 0, skipped: 0, ambiguous: 0, examined: 0, remaining: 0,
-    sessionExpired: false, timedOut: false, errors: [], ambiguousDetails: [],
+    filled: 0, notFound: 0, skipped: 0, ambiguous: 0, noAmountMatch: 0, examined: 0, remaining: 0,
+    sessionExpired: false, timedOut: false, errors: [], ambiguousDetails: [], noAmountMatchDetails: [],
   };
   const startTime = Date.now();
   const MAX_RUNTIME_MS = 5 * 60 * 1000;
-  const scrapeCache = {}; // aptBookingId -> string[] of invoice IDs found on its list page
+  const scrapeCache = {}; // aptBookingId -> {invoiceId, amount}[] found on its list page
 
   for (const inv of eligible) {
     if (result.examined >= cap) break;
@@ -677,35 +677,37 @@ function backfillApartmenteryInvoiceIds(maxItems) {
 
       if (candidates.length === 0) { result.notFound++; continue; }
 
-      // Prefer an exact amount match — resolves multi-invoice bookings
-      // correctly even when more than one candidate is still on the table.
-      // Small epsilon for float rounding; amounts here are always 2dp.
+      // Only assign on an EXACT amount match — no elimination-by-count
+      // fallback. Real data (booking 313286, flagged by Nathan 2026-07-30)
+      // showed a candidate can be the only one left and still not be the
+      // right invoice at all (e.g. the sheet's net doesn't correspond to
+      // any invoice actually on this booking) — guessing on "only one
+      // left" isn't safe the way it is for IDs, since amount already
+      // disagrees. A wrong link is worse than no link.
       const netNum = Number(inv.net);
       const amountMatches = candidates.filter(x => Math.abs(x.amount - netNum) < 0.01);
 
-      let invoiceId = null;
       if (amountMatches.length === 1) {
-        invoiceId = amountMatches[0].invoiceId;
-      } else if (amountMatches.length === 0 && candidates.length === 1) {
-        // No amount match, but only one candidate left after excluding
-        // already-claimed IDs — safe by elimination (e.g. amount off by a
-        // rounding/fee difference, but nothing else it could be).
-        invoiceId = candidates[0].invoiceId;
-      } else {
-        // Either 0 candidates matched by amount with >1 candidate still
-        // possible, or >1 candidates share the same amount — can't tell
-        // them apart safely, don't guess.
-        result.ambiguous++;
-        result.ambiguousDetails.push({
+        setInvoiceApartmenteryIds(inv.invoiceKey, aptBookingId, amountMatches[0].invoiceId);
+        alreadyAssignedIds[amountMatches[0].invoiceId] = true; // so a later eligible key for the same booking this run doesn't re-claim it
+        result.filled++;
+      } else if (amountMatches.length === 0) {
+        // None of the candidates on this booking's page match this
+        // invoiceKey's net amount at all — needs a human look, not a guess.
+        result.noAmountMatch++;
+        result.noAmountMatchDetails.push({
           invoiceKey: inv.invoiceKey, guest: inv.guest, room: inv.room, net: inv.net,
           aptBookingId: aptBookingId, candidates: candidates,
         });
-        continue;
+      } else {
+        // More than one candidate shares this exact amount — can't tell
+        // them apart either.
+        result.ambiguous++;
+        result.ambiguousDetails.push({
+          invoiceKey: inv.invoiceKey, guest: inv.guest, room: inv.room, net: inv.net,
+          aptBookingId: aptBookingId, candidates: amountMatches,
+        });
       }
-
-      setInvoiceApartmenteryIds(inv.invoiceKey, aptBookingId, invoiceId);
-      alreadyAssignedIds[invoiceId] = true; // so a later eligible key for the same booking this run doesn't re-claim it
-      result.filled++;
     } catch (err) {
       if (isApartmenterySessionExpiredError(err)) {
         result.sessionExpired = true;
@@ -719,8 +721,8 @@ function backfillApartmenteryInvoiceIds(maxItems) {
 
   Logger.log(`backfillApartmenteryInvoiceIds: examined=${result.examined} filled=${result.filled} ` +
     `notFound=${result.notFound} skipped=${result.skipped} ambiguous=${result.ambiguous} ` +
-    `remaining=${result.remaining} sessionExpired=${result.sessionExpired} timedOut=${result.timedOut} ` +
-    `errors=${result.errors.length}`);
+    `noAmountMatch=${result.noAmountMatch} remaining=${result.remaining} ` +
+    `sessionExpired=${result.sessionExpired} timedOut=${result.timedOut} errors=${result.errors.length}`);
   return result;
 }
 
