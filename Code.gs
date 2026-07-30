@@ -587,6 +587,7 @@ function doGet_(e) {
     const id   = e.parameter.id   || '';
     const note = e.parameter.note || '';
     const result = setBookingNote(id, note);
+    triggerStyleSheet1_();
     return jsonResponse_(result);
   }
 
