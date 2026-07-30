@@ -905,6 +905,27 @@ function getExistingApartmenteryInvoiceIds_(branchId, unitId, bookingId) {
 }
 
 /**
+ * One-off debug helper (2026-07-30) — returns the RAW HTML of a booking's
+ * invoice-list page, uninterpreted. Purpose: getExistingApartmenteryInvoiceIds_
+ * can already find invoice IDs on this page, but for multi-invoice bookings
+ * there's no way to tell which ID belongs to which invoiceKey without also
+ * capturing each row's ยอดรวม (บาท) amount — and guessing that markup
+ * blindly already burned two failed attempts on the ID-scraping path
+ * itself (see git history: /edit page, then plain booking page, before
+ * landing on the correct .../invoice list page). Rather than guess a
+ * third time, this just hands back the real markup so the amount-matching
+ * regex can be written against ground truth.
+ *
+ * Not wired to any automation — purely diagnostic, remove once amount
+ * matching (if built) makes it redundant.
+ */
+function debugFetchInvoiceListHtml_(branchId, unitId, bookingId) {
+  const listPath = `/user/branch/${branchId}/unit/${unitId}/booking/${bookingId}/invoice`;
+  const response = _apartmenteryFetch_(listPath, { method: 'get' });
+  return { httpStatus: response.getResponseCode(), html: response.getContentText() };
+}
+
+/**
  * Creates a receipt for an existing invoice.
  * Pre-fills electPrice/waterPrice/vat/withholding from the invoice itself
  * (GET the receipt/add form first) rather than recomputing them.

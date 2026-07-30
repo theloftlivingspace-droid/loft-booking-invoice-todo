@@ -622,6 +622,16 @@ function doGet_(e) {
     return jsonResponse_(clearAmbiguousInvoiceApartmenteryIds());
   }
 
+  // One-off diagnostic (2026-07-30) for building amount-based matching on
+  // multi-invoice bookings — see debugFetchInvoiceListHtml_ for why.
+  if (action === 'debugInvoiceListHtml') {
+    const room = e.parameter.room || '';
+    const bookingId = e.parameter.bookingId || '';
+    const unit = getApartmenteryUnitForRoom(room);
+    if (!unit) return jsonResponse_({ error: 'unknown room: ' + room });
+    return jsonResponse_(debugFetchInvoiceListHtml_(unit.branchId, unit.unitId, bookingId));
+  }
+
   // Default: serve HTML webapp
   const template = HtmlService.createTemplateFromFile('Index');
   return template.evaluate()
