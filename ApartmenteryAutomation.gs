@@ -727,6 +727,117 @@ function backfillApartmenteryInvoiceIds(maxItems) {
 }
 
 /**
+ * Diagnostic companion to backfillApartmenteryInvoiceIds() — same
+ * resolution logic, but read-only (never calls setInvoiceApartmenteryIds)
+ * and returns a specific reason for every still-eligible invoiceKey
+ * instead of just a bucket count. Meant to be run once the normal
+ * backfill has plateaued (remaining stops shrinking meaningfully between
+ * batches — the fingerprint of a stuck set cycling through notFound/
+ * skipped every run), so Nathan can see the whole remaining picture in
+ * one shot instead of paging through repeated batch JSON.
+ *
+ * No maxItems cap by default — meant to run over whatever's left, which
+ * by the time this is worth running should be a small set. Pass one if
+ * needed for a mobile-safe batch size, same as the backfill itself.
+ */
+function reportStuckApartmenteryInvoices(maxItems) {
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const todayStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
+
+  const bookingItems = getBookingToAdd_(ss, todayStr);
+  const invoiceItems = getInvoiceToCreate_(ss, todayStr);
+
+  const keyToResId = {};
+  bookingItems.forEach(b => {
+    const aptId = getApartmenteryBookingId_(b.resId);
+    if (!aptId) return;
+    (b.matchKeys || []).forEach(k => { if (!keyToResId[k]) keyToResId[k] = { resId: b.resId, guest: b.guest }; });
+  });
+
+  const alreadyAssignedIds = {};
+  const persistedAptIds = getProp_(PROP_KEY_INVOICE_APT_IDS);
+  Object.keys(persistedAptIds).forEach(k => {
+    const parts = String(persistedAptIds[k] || '').split(':');
+    if (parts[1]) alreadyAssignedIds[parts[1]] = true;
+  });
+
+  const eligible = invoiceItems.filter(inv =>
+    inv.done && !inv.apartmenteryInvoiceId && String(inv.room).indexOf('ไม่ทราบห้อง') < 0
+  );
+  const cap = maxItems && maxItems > 0 ? maxItems : Infinity;
+
+  const items = [];
+  const scrapeCache = {};
+  const startTime = Date.now();
+  const MAX_RUNTIME_MS = 5 * 60 * 1000;
+  let examined = 0;
+
+  for (const inv of eligible) {
+    if (examined >= cap) break;
+    if (Date.now() - startTime > MAX_RUNTIME_MS) break;
+    examined++;
+
+    const base = { invoiceKey: inv.invoiceKey, guest: inv.guest, room: inv.room, net: inv.net };
+
+    let resId = null;
+    for (const k of (inv.matchKeys || [])) {
+      const candidate = keyToResId[k];
+      if (!candidate) continue;
+      if (!_namesMatchIgnoringOrder_(inv.guest, candidate.guest) &&
+          !_namesMatchIgnoringOrder_(candidate.guest, inv.guest)) {
+        continue;
+      }
+      resId = candidate.resId;
+      break;
+    }
+    if (!resId) { items.push(Object.assign({}, base, { reason: 'no matching booking found for this invoiceKey' })); continue; }
+
+    const aptBookingId = getApartmenteryBookingId_(resId);
+    if (!aptBookingId) { items.push(Object.assign({}, base, { reason: 'booking has no Apartmentery Booking ID yet' })); continue; }
+
+    const unit = getApartmenteryUnitForRoom(inv.room);
+    if (!unit) { items.push(Object.assign({}, base, { reason: 'unknown room/unit: ' + inv.room })); continue; }
+
+    try {
+      if (!(aptBookingId in scrapeCache)) {
+        scrapeCache[aptBookingId] = getExistingApartmenteryInvoices_(unit.branchId, unit.unitId, aptBookingId);
+      }
+      const raw = scrapeCache[aptBookingId];
+      const candidates = raw.filter(x => !alreadyAssignedIds[x.invoiceId]);
+
+      if (raw.length === 0) {
+        items.push(Object.assign({}, base, { aptBookingId: aptBookingId, reason: "no invoices found at all on this booking's Apartmentery page" }));
+        continue;
+      }
+      if (candidates.length === 0) {
+        items.push(Object.assign({}, base, { aptBookingId: aptBookingId, reason: 'every invoice on this booking is already linked to a different invoiceKey', rawInvoices: raw }));
+        continue;
+      }
+
+      const netNum = Number(inv.net);
+      const amountMatches = candidates.filter(x => Math.abs(x.amount - netNum) < 0.01);
+
+      if (amountMatches.length === 1) {
+        items.push(Object.assign({}, base, { aptBookingId: aptBookingId, reason: 'would resolve on next backfill run', matchedInvoiceId: amountMatches[0].invoiceId }));
+      } else if (amountMatches.length === 0) {
+        items.push(Object.assign({}, base, { aptBookingId: aptBookingId, reason: "no candidate invoice on this booking matches this invoiceKey's amount", candidates: candidates }));
+      } else {
+        items.push(Object.assign({}, base, { aptBookingId: aptBookingId, reason: 'multiple invoices on this booking share this exact amount', candidates: amountMatches }));
+      }
+    } catch (err) {
+      if (isApartmenterySessionExpiredError(err)) {
+        items.push(Object.assign({}, base, { reason: 'Apartmentery session expired mid-report' }));
+        break;
+      }
+      items.push(Object.assign({}, base, { reason: 'error: ' + err.message }));
+    }
+  }
+
+  Logger.log(`reportStuckApartmenteryInvoices: examined ${examined} of ${eligible.length} eligible`);
+  return { examinedCount: examined, totalEligible: eligible.length, items: items };
+}
+
+/**
  * Read-only audit of invoice_apt_ids_v1 for the fingerprint of the
  * pre-2026-07-30 backfill bug: an invoiceId that got wired to MORE THAN
  * ONE invoiceKey. That could only happen for a genuinely multi-invoice

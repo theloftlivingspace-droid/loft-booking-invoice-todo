@@ -632,6 +632,13 @@ function doGet_(e) {
     return jsonResponse_(debugFetchInvoiceListHtml_(unit.branchId, unit.unitId, bookingId));
   }
 
+  // Read-only diagnostic — same resolution logic as backfillApartmenteryInvoiceIds
+  // but never writes anything, reports a specific reason per stuck invoiceKey.
+  if (action === 'reportStuckApartmenteryInvoices') {
+    const limit = e.parameter.limit ? parseInt(e.parameter.limit, 10) : 0;
+    return jsonResponse_(reportStuckApartmenteryInvoices(limit));
+  }
+
   // Default: serve HTML webapp
   const template = HtmlService.createTemplateFromFile('Index');
   return template.evaluate()
