@@ -707,6 +707,68 @@ function backfillApartmenteryInvoiceIds(maxItems) {
 }
 
 /**
+ * Read-only audit of invoice_apt_ids_v1 for the fingerprint of the
+ * pre-2026-07-30 backfill bug: an invoiceId that got wired to MORE THAN
+ * ONE invoiceKey. That could only happen for a genuinely multi-invoice
+ * booking that was backfilled before the fix — the old scraper always
+ * took the first invoice link on the page, so every invoiceKey sharing
+ * that booking got the same wrong ID.
+ *
+ * Does not touch Apartmentery at all — just cross-references
+ * invoice_apt_ids_v1 against the current invoice-to-create list (for
+ * guest/room/net context) and reports which invoiceIds are claimed more
+ * than once, for manual review. Doesn't fix anything by itself, since
+ * telling which one of the duplicate claimants is actually correct needs
+ * a human looking at Apartmentery.
+ */
+function auditInvoiceApartmenteryIdsForDuplicates() {
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const todayStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
+  const invoiceItems = getInvoiceToCreate_(ss, todayStr);
+  const keyToInfo = {};
+  invoiceItems.forEach(inv => { keyToInfo[inv.invoiceKey] = inv; });
+
+  const aptIdsMap = getProp_(PROP_KEY_INVOICE_APT_IDS);
+  const byInvoiceId = {}; // invoiceId -> [{ invoiceKey, aptBookingId }]
+
+  Object.keys(aptIdsMap).forEach(invoiceKey => {
+    const parts = String(aptIdsMap[invoiceKey] || '').split(':');
+    const aptBookingId = parts[0];
+    const invoiceId = parts[1];
+    if (!invoiceId) return;
+    if (!byInvoiceId[invoiceId]) byInvoiceId[invoiceId] = [];
+    byInvoiceId[invoiceId].push({ invoiceKey: invoiceKey, aptBookingId: aptBookingId });
+  });
+
+  const duplicates = [];
+  Object.keys(byInvoiceId).forEach(invoiceId => {
+    const entries = byInvoiceId[invoiceId];
+    if (entries.length <= 1) return;
+    duplicates.push({
+      invoiceId: invoiceId,
+      aptBookingId: entries[0].aptBookingId,
+      invoiceKeys: entries.map(e => {
+        const info = keyToInfo[e.invoiceKey];
+        return {
+          invoiceKey: e.invoiceKey,
+          guest: info ? info.guest : '(ไม่พบใน invoice-to-create list ปัจจุบัน — สถานะอาจเปลี่ยนไปแล้ว)',
+          room: info ? info.room : '',
+          net: info ? info.net : '',
+        };
+      }),
+    });
+  });
+
+  Logger.log(`auditInvoiceApartmenteryIdsForDuplicates: found ${duplicates.length} invoiceId(s) claimed by more than one invoiceKey`);
+  duplicates.forEach(d => {
+    Logger.log(`  invoiceId ${d.invoiceId} (booking ${d.aptBookingId}) claimed by ${d.invoiceKeys.length}: ` +
+      d.invoiceKeys.map(k => `${k.invoiceKey} [${k.guest}, ${k.room}, ฿${k.net}]`).join(' | '));
+  });
+
+  return { duplicateCount: duplicates.length, duplicates: duplicates };
+}
+
+/**
  * Backfill for EXISTING rows that already have no apartmentery bookingId
  * but will NEVER be picked up by autoCreateApartmenteryBookings(), because
  * that function skips any resId already marked done in booking_done_v1 —

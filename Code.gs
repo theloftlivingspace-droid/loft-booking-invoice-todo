@@ -609,6 +609,13 @@ function doGet_(e) {
     return jsonResponse_(backfillApartmenteryInvoiceIds(limit));
   }
 
+  // Fully read-only — doesn't touch Apartmentery at all, only cross-references
+  // invoice_apt_ids_v1 against the sheet — so no batching/limit needed like
+  // backfillApartmenteryInvoiceIds above.
+  if (action === 'auditInvoiceApartmenteryIdsForDuplicates') {
+    return jsonResponse_(auditInvoiceApartmenteryIdsForDuplicates());
+  }
+
   // Default: serve HTML webapp
   const template = HtmlService.createTemplateFromFile('Index');
   return template.evaluate()
