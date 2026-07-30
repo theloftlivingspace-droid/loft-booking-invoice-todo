@@ -733,24 +733,52 @@ function getRevenueLedger_() {
   if (!sheetL || sheetL.getLastRow() < 2) return [];
 
   const dataL = sheetL.getDataRange().getValues();
-  const ledger = [];
-  const seen = {};
+
+  // Bank_Ledger sometimes has the SAME Booking ID (SCB reference) appear on
+  // several rows: one row per guest in a multi-guest batch settlement PLUS
+  // one combined row (Conf. Code / guest / room comma-joined) whose net
+  // already equals the sum of the individual rows — rebuildBankLedger()'s
+  // sub-row filter (notes starting with '↳') doesn't catch these because
+  // the per-guest rows here are written with a full '✅ Matched - ...'
+  // status/note, not '↳'. Naively de-duping to "first row wins" (as this
+  // function used to) silently kept a single guest's partial amount and
+  // discarded the rest — undercounting every batch payout. Fix: group by
+  // Booking ID, and when a group has a combined (comma-joined Conf. Code)
+  // row, keep only that one; otherwise keep the group as-is.
+  const groups = {};
+  const order = [];
   for (let i = 1; i < dataL.length; i++) {
     const row = dataL[i];
     const bid = String(row[2] || '').trim();
-    if (!bid || seen[bid]) continue;
-    seen[bid] = true;
-    ledger.push({
-      date: String(row[0] || ''), ota: String(row[1] || ''), bookingId: bid,
-      guest: String(row[4] || ''), room: String(row[5] || ''),
-      checkin: String(row[6] || ''), checkout: String(row[7] || ''),
-      nights: parseInt(row[8]) || 0,
-      gross: parseFloat(String(row[9]).replace(/,/g, '')) || 0,
-      commission: parseFloat(String(row[10]).replace(/,/g, '')) || 0,
-      net: parseFloat(String(row[11]).replace(/,/g, '')) || 0,
-      status: String(row[12] || ''),
-    });
+    if (!bid) continue;
+    if (!groups[bid]) { groups[bid] = []; order.push(bid); }
+    groups[bid].push(row);
   }
+
+  const ledger = [];
+  order.forEach(bid => {
+    const grp = groups[bid];
+    let rowsToKeep = grp;
+    if (grp.length > 1) {
+      const combined = grp.filter(r => String(r[3] || '').indexOf(',') >= 0);
+      if (combined.length === 1) rowsToKeep = combined;
+      // if there's no single unambiguous combined row, fall back to keeping
+      // every row in the group rather than guessing — better to overcount
+      // a rare edge case visibly than silently drop money.
+    }
+    rowsToKeep.forEach(row => {
+      ledger.push({
+        date: String(row[0] || ''), ota: String(row[1] || ''), bookingId: bid,
+        guest: String(row[4] || ''), room: String(row[5] || ''),
+        checkin: String(row[6] || ''), checkout: String(row[7] || ''),
+        nights: parseInt(row[8]) || 0,
+        gross: parseFloat(String(row[9]).replace(/,/g, '')) || 0,
+        commission: parseFloat(String(row[10]).replace(/,/g, '')) || 0,
+        net: parseFloat(String(row[11]).replace(/,/g, '')) || 0,
+        status: String(row[12] || ''),
+      });
+    });
+  });
   return ledger;
 }
 
