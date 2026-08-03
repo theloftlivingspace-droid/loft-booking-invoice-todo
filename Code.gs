@@ -1601,7 +1601,7 @@ function cancelBooking_(resId) {
  * ============================================================ */
 function triggerStyleSheet1_() {
   try {
-    var PAYOUT_GAS_URL = 'https://script.google.com/macros/s/AKfycbyAP9Z_pIlKrXv9AOXwDhY0wNVSSFL0vU8VuH0SssFyxretRyt9CJNjxVZOLN3eFjs/exec';
+    var PAYOUT_GAS_URL = 'https://script.google.com/macros/s/AKfycbxwlKBtlw74Z52ryAK2SNV_3mNXhFzk3IoANSOqNBhfENUdO3QhfQUKovZ6_THXfeE/exec';
     var resp = UrlFetchApp.fetch(PAYOUT_GAS_URL, {
       method: 'post',
       contentType: 'application/json',
