@@ -264,6 +264,47 @@ function markCheckedIn_(body) {
   return { ok: true, resId: resId, checkedInAt: now };
 }
 
+/**
+ * Shared Apartmentery-sync step for anything that shrinks/moves a booking's
+ * checkout date in Sheet1 (early checkout, extend-date edit). Looks up the
+ * booking's Apartmentery bookingId (backfilling it via guest-name match if
+ * missing), then pushes the new end date to the live Apartmentery calendar.
+ * Returns a result object that the caller should merge into its own return
+ * value — never throws; all failure modes come back as apartmenteryNote.
+ */
+function syncApartmenteryCheckoutDate_(resId, room, guest, checkin, newCheckout) {
+  const result = { apartmenterySynced: false };
+  try {
+    var aptId = getApartmenteryBookingId_(resId);
+    if (!aptId) {
+      var foundId = findApartmenteryBookingIdForRoomByGuest_(room, guest, checkin);
+      if (foundId) {
+        aptId = foundId;
+        setApartmenteryBookingId_(resId, foundId);
+        result.apartmenteryBackfilled = true;
+        triggerStyleSheet1_();
+      }
+    }
+    if (aptId) {
+      const r = updateApartmenteryBookingEndDateForRoom(room, aptId, newCheckout);
+      if (r && r.skipped) {
+        result.apartmenteryNote = r.reason;
+      } else {
+        result.apartmenterySynced = true;
+      }
+    } else {
+      result.apartmenteryNote = 'no apartmentery bookingId yet — nothing to sync';
+    }
+  } catch (e) {
+    if (isApartmenterySessionExpiredError(e)) {
+      result.apartmenteryNote = 'Apartmentery session expired — update the date there manually';
+    } else {
+      result.apartmenteryNote = 'Apartmentery sync failed: ' + e;
+    }
+  }
+  return result;
+}
+
 function earlyCheckout_(body) {
   const resId = String(body.resId || '');
   if (!resId) return { ok: false, error: 'Missing resId' };
@@ -303,6 +344,7 @@ function earlyCheckout_(body) {
   //    so occupancy/availability reflects the checkout immediately, not just
   //    the CheckStatus log.
   var sheet1Updated = false;
+  var syncResult = { apartmenterySynced: false };
   try {
     const ss  = SpreadsheetApp.openById(SOURCE_SHEET_ID);
     const src = ss.getSheetByName(SRC_BOOKING_SHEET);
@@ -316,14 +358,20 @@ function earlyCheckout_(body) {
             src.getRange(i + 1, idx['เช็คเอาท์'] + 1).setValue(newCheckout);
             sheet1Updated = true;
 
+            var roomNum  = idx['เลขห้อง'] >= 0 ? String(data[i][idx['เลขห้อง']] || '').trim() : '';
+            var guest    = idx['ชื่อแขก']  >= 0 ? String(data[i][idx['ชื่อแขก']]  || '').trim() : '';
+            // formatCellDate_ ให้ผลเป็น YYYY-MM-DD เสมอ (ไม่ว่า cell จะเป็น
+            // Date object หรือ string) — ต้องใช้ตัวนี้แทนการอ่าน raw value
+            // เพราะ findApartmenteryBookingIdForRoomByGuest_ (เรียกจาก
+            // syncApartmenteryCheckoutDate_ ด้านล่าง) ต้องการรูปแบบนี้เป๊ะๆ
+            // ถึงจะ match วันที่บนปฏิทิน Apartmentery ได้
+            var checkin  = idx['เช็คอิน']  >= 0 ? formatCellDate_(data[i][idx['เช็คอิน']]) : '';
+
             // แจ้งกลุ่มแม่บ้านผ่าน LINE bot ว่ามี checkout ก่อนกำหนด
             try {
               var props    = PropertiesService.getScriptProperties();
               var botUrl   = props.getProperty('BOT_URL')   || 'https://hotel-line-bot.onrender.com';
               var adminTok = props.getProperty('ADMIN_TOKEN') || 'apt2025@secret';
-              var roomNum  = idx['เลขห้อง'] >= 0 ? String(data[i][idx['เลขห้อง']] || '').trim() : '';
-              var guest    = idx['ชื่อแขก']  >= 0 ? String(data[i][idx['ชื่อแขก']]  || '').trim() : '';
-              var checkin  = idx['เช็คอิน']  >= 0 ? String(data[i][idx['เช็คอิน']]  || '').trim() : '';
               UrlFetchApp.fetch(botUrl + '/api/checkout-notify', {
                 method: 'post',
                 contentType: 'application/json',
@@ -332,6 +380,12 @@ function earlyCheckout_(body) {
                 muteHttpExceptions: true
               });
             } catch (e) { Logger.log('checkout-notify LINE error: ' + e); }
+
+            // Push the shrunk date to the live Apartmentery calendar too —
+            // same sync updateCheckoutDate_ does, so early-checkout via the
+            // dashboard button (or auto-checkout on inspection) doesn't
+            // silently drift out of sync with Apartmentery like it used to.
+            syncResult = syncApartmenteryCheckoutDate_(resId, roomNum, guest, checkin, newCheckout);
 
             break;
           }
@@ -343,7 +397,9 @@ function earlyCheckout_(body) {
     Logger.log('earlyCheckout_ Sheet1 update error: ' + e);
   }
 
-  return { ok: true, resId: resId, checkedOutAt: now, newCheckout: newCheckout, sheet1Updated: sheet1Updated };
+  return Object.assign({
+    ok: true, resId: resId, checkedOutAt: now, newCheckout: newCheckout, sheet1Updated: sheet1Updated
+  }, syncResult);
 }
 
 /**
@@ -423,47 +479,12 @@ function updateCheckoutDate_(body) {
   src.getRange(rowIdx + 1, idx['เช็คเอาท์'] + 1).setValue(newCheckout);
   triggerStyleSheet1_();
 
-  const result = {
+  const syncResult = syncApartmenteryCheckoutDate_(resId, room, guest, checkin, newCheckout);
+
+  return Object.assign({
     ok: true, resId: resId, room: room, guest: guest, checkin: checkin,
-    oldCheckout: oldCheckout, newCheckout: newCheckout, apartmenterySynced: false
-  };
-
-  try {
-    var aptId = getApartmenteryBookingId_(resId);
-    if (!aptId) {
-      // No bookingId recorded — could just be a booking the automation
-      // hasn't created yet (next hourly run will pick it up with the new
-      // date), OR one that was added to apartmentery manually before the
-      // automation existed and so never got its ID written back to
-      // Sheet1. Try to recover the latter case by matching guest name +
-      // exact checkin date on the room's apartmentery calendar.
-      var foundId = findApartmenteryBookingIdForRoomByGuest_(room, guest, checkin);
-      if (foundId) {
-        aptId = foundId;
-        setApartmenteryBookingId_(resId, foundId);
-        result.apartmenteryBackfilled = true;
-        triggerStyleSheet1_();
-      }
-    }
-    if (aptId) {
-      const r = updateApartmenteryBookingEndDateForRoom(room, aptId, newCheckout);
-      if (r && r.skipped) {
-        result.apartmenteryNote = r.reason;
-      } else {
-        result.apartmenterySynced = true;
-      }
-    } else {
-      result.apartmenteryNote = 'no apartmentery bookingId yet — nothing to sync';
-    }
-  } catch (e) {
-    if (isApartmenterySessionExpiredError(e)) {
-      result.apartmenteryNote = 'Apartmentery session expired — update the date there manually';
-    } else {
-      result.apartmenteryNote = 'Apartmentery sync failed: ' + e;
-    }
-  }
-
-  return result;
+    oldCheckout: oldCheckout, newCheckout: newCheckout
+  }, syncResult);
 }
 
 function getCheckStatusMap_() {
