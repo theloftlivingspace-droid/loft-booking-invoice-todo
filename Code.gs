@@ -1561,38 +1561,16 @@ function cancelBooking_(resId) {
       // (ไม่ใช่ checkin+1 เหมือนเดิม) ถ้ายังไม่ถึงวันเช็คอิน, หรือ = วันนี้ ถ้าเข้าพักแล้ว
       var aptEndDate = newCheckoutYMD || todayBKK;
 
-      // ปรับ end date ใน Apartmentery (pattern เดียวกับ updateCheckoutDate_) —
-      // ถ้ายังไม่มี bookingId ให้ลอง backfill จาก guest name + checkin date
-      // ก่อน แล้วค่อยยิง update
-      var apartmenterySynced = false, apartmenteryNote = '';
-      try {
-        var aptId = getApartmenteryBookingId_(resId);
-        if (!aptId) {
-          var foundId = findApartmenteryBookingIdForRoomByGuest_(currentRoom, guest, checkin);
-          if (foundId) {
-            aptId = foundId;
-            setApartmenteryBookingId_(resId, foundId);
-            triggerStyleSheet1_();
-          }
-        }
-        if (aptId) {
-          var r = updateApartmenteryBookingEndDateForRoom(currentRoom, aptId, aptEndDate);
-          if (r && r.skipped) {
-            apartmenteryNote = r.reason;
-          } else {
-            apartmenterySynced = true;
-          }
-        } else {
-          apartmenteryNote = 'no apartmentery bookingId yet — nothing to sync';
-        }
-      } catch (e) {
-        if (isApartmenterySessionExpiredError(e)) {
-          apartmenteryNote = 'Apartmentery session expired — update the date there manually';
-        } else {
-          apartmenteryNote = 'Apartmentery sync failed: ' + e;
-        }
-        Logger.log('cancelBooking_ apartmentery sync error: ' + e);
-      }
+      // ใช้ syncApartmenteryCheckoutDate_ ตัวกลางเดียวกับ earlyCheckout_ /
+      // updateCheckoutDate_ — เดิมจุดนี้เขียน logic แยกเองและส่ง checkin
+      // แบบดิบ (raw cell value) เข้า guest-name-match fallback แทนที่จะเป็น
+      // checkinYMD ที่ format แล้ว ทำให้ตอนเซลล์เช็คอินเป็น Date object
+      // (ปกติของชีทนี้) การหา bookingId ด้วยชื่อแขก+วันที่จะไม่ match เลย
+      // และ apartmentery จะไม่ถูกซิงก์แบบเงียบๆ — เหมือนบั๊กที่เจอใน
+      // earlyCheckout_ ก่อนหน้านี้
+      var syncResult = syncApartmenteryCheckoutDate_(resId, currentRoom, guest, checkinYMD, aptEndDate);
+      var apartmenterySynced = syncResult.apartmenterySynced;
+      var apartmenteryNote = syncResult.apartmenteryNote || '';
 
       // แจ้งกลุ่มแม่บ้านผ่าน LINE bot
       try {
