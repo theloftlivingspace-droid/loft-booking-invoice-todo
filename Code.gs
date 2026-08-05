@@ -355,9 +355,6 @@ function earlyCheckout_(body) {
       if (idx.ResId >= 0 && idx['เช็คเอาท์'] >= 0) {
         for (var i = 1; i < data.length; i++) {
           if (String(data[i][idx.ResId] || '').trim() === resId) {
-            src.getRange(i + 1, idx['เช็คเอาท์'] + 1).setValue(newCheckout);
-            sheet1Updated = true;
-
             var roomNum  = idx['เลขห้อง'] >= 0 ? String(data[i][idx['เลขห้อง']] || '').trim() : '';
             var guest    = idx['ชื่อแขก']  >= 0 ? String(data[i][idx['ชื่อแขก']]  || '').trim() : '';
             // formatCellDate_ ให้ผลเป็น YYYY-MM-DD เสมอ (ไม่ว่า cell จะเป็น
@@ -366,8 +363,12 @@ function earlyCheckout_(body) {
             // syncApartmenteryCheckoutDate_ ด้านล่าง) ต้องการรูปแบบนี้เป๊ะๆ
             // ถึงจะ match วันที่บนปฏิทิน Apartmentery ได้
             var checkin  = idx['เช็คอิน']  >= 0 ? formatCellDate_(data[i][idx['เช็คอิน']]) : '';
+            var currentCheckoutYMD = formatCellDate_(data[i][idx['เช็คเอาท์']]);
+            var dateUnchanged = !!currentCheckoutYMD && currentCheckoutYMD === newCheckout;
 
-            // แจ้งกลุ่มแม่บ้านผ่าน LINE bot ว่ามี checkout ก่อนกำหนด
+            // แจ้งกลุ่มแม่บ้านผ่าน LINE bot ทุกครั้งที่มีการเช็คเอาท์ — ไม่ว่า
+            // จะเป็นวันปกติหรือก่อนกำหนด (อันนี้แยกจากเรื่อง sheet1/apartmentery
+            // ด้านล่าง ยังคงแจ้งเหมือนเดิมไม่เปลี่ยน)
             try {
               var props    = PropertiesService.getScriptProperties();
               var botUrl   = props.getProperty('BOT_URL')   || 'https://hotel-line-bot.onrender.com';
@@ -380,6 +381,21 @@ function earlyCheckout_(body) {
                 muteHttpExceptions: true
               });
             } catch (e) { Logger.log('checkout-notify LINE error: ' + e); }
+
+            // ── เช็คเอาท์ตามวันปกติ (วันที่ไม่เปลี่ยน) ──────────────────
+            // ถ้า newCheckout ตรงกับวันเช็คเอาท์ที่บันทึกไว้ใน Sheet1 อยู่แล้ว
+            // แปลว่านี่คือ auto-checkout วันปกติ ไม่ใช่การเปลี่ยนแปลงจริง —
+            // Sheet1 ถูกต้องอยู่แล้วและ Apartmentery ก็ไม่เคยถูกแก้ให้ผิดไป
+            // ตั้งแต่แรก จึงไม่ต้องเขียนซ้ำหรือยิง sync ไป Apartmentery เลย
+            // (ต้องมีการเปลี่ยนแปลงจริงจาก admin dashboard เท่านั้น — เช่น
+            // เช็คเอาท์ก่อนกำหนด/แก้วันที่/ยกเลิก — ถึงจะต้องแตะสองที่นี้)
+            if (dateUnchanged) {
+              syncResult = { apartmenterySynced: true, dateUnchanged: true };
+              break;
+            }
+
+            src.getRange(i + 1, idx['เช็คเอาท์'] + 1).setValue(newCheckout);
+            sheet1Updated = true;
 
             // Push the shrunk date to the live Apartmentery calendar too —
             // same sync updateCheckoutDate_ does, so early-checkout via the
