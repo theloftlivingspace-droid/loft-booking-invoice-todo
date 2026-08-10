@@ -1615,27 +1615,49 @@ function cancelBooking_(resId) {
  *  Trigger styleSheet1 on payout-income-log GAS (fire-and-forget)
  * ============================================================ */
 function triggerStyleSheet1_() {
-  try {
-    var PAYOUT_GAS_URL = 'https://script.google.com/macros/s/AKfycbxwlKBtlw74Z52ryAK2SNV_3mNXhFzk3IoANSOqNBhfENUdO3QhfQUKovZ6_THXfeE/exec';
-    var resp = UrlFetchApp.fetch(PAYOUT_GAS_URL, {
-      method: 'post',
-      contentType: 'application/json',
-      payload: JSON.stringify({ action: 'styleSheet1' }),
-      muteHttpExceptions: true,
-      followRedirects: true,
-    });
-    // Still fire-and-forget (callers don't wait on this), but log the
-    // outcome instead of silently discarding it — previously any failure
-    // here (network blip, webapp cold start, quota) left zero trace
-    // anywhere, so a cancelled booking could sit unstyled indefinitely
-    // with no way to tell this call ever ran, let alone failed.
-    var code = resp.getResponseCode();
-    if (code !== 200) {
-      Logger.log('triggerStyleSheet1_: non-200 response ' + code + ' — ' + resp.getContentText().substring(0, 200));
+  // Retries on top of the original fire-and-forget POST — a single network
+  // blip / webapp cold start used to leave a row's pink "missing ID" /
+  // italic formatting stuck forever (col I gets its value via a plain
+  // setValue() in setApartmenteryBookingId_, so nothing else ever repaints
+  // it until styleSheet1() actually runs again). 3 attempts with backoff;
+  // only truly gives up — loudly — if all 3 fail.
+  var PAYOUT_GAS_URL = 'https://script.google.com/macros/s/AKfycbxwlKBtlw74Z52ryAK2SNV_3mNXhFzk3IoANSOqNBhfENUdO3QhfQUKovZ6_THXfeE/exec';
+  var MAX_ATTEMPTS = 3;
+  var BACKOFF_MS = [1000, 3000]; // between attempt 1→2 and 2→3
+
+  for (var attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      var resp = UrlFetchApp.fetch(PAYOUT_GAS_URL, {
+        method: 'post',
+        contentType: 'application/json',
+        payload: JSON.stringify({ action: 'styleSheet1' }),
+        muteHttpExceptions: true,
+        followRedirects: true,
+      });
+      var code = resp.getResponseCode();
+      if (code === 200) {
+        if (attempt > 1) Logger.log('triggerStyleSheet1_: succeeded on attempt ' + attempt);
+        return;
+      }
+      Logger.log('triggerStyleSheet1_: attempt ' + attempt + '/' + MAX_ATTEMPTS +
+        ' non-200 response ' + code + ' — ' + resp.getContentText().substring(0, 200));
+    } catch (e) {
+      Logger.log('triggerStyleSheet1_: attempt ' + attempt + '/' + MAX_ATTEMPTS + ' error — ' + e);
     }
-  } catch (e) {
-    Logger.log('triggerStyleSheet1_ error (non-fatal): ' + e);
+    if (attempt < MAX_ATTEMPTS) Utilities.sleep(BACKOFF_MS[attempt - 1]);
   }
+
+  // All attempts failed — this is the case that used to vanish silently.
+  // Log loudly so it's visible in the executions dashboard, and stash a
+  // marker in Script Properties so the next successful run (of anything
+  // that happens to call triggerStyleSheet1_ again) isn't the only thing
+  // standing between a row and permanently-wrong formatting.
+  Logger.log('triggerStyleSheet1_: FAILED after ' + MAX_ATTEMPTS + ' attempts — Sheet1 formatting is now ' +
+    'stale (rows with a newly-written Apartmentery Booking ID may still show the pink "missing ID" style ' +
+    'until styleSheet1() is run manually or by the next trigger that succeeds).');
+  try {
+    PropertiesService.getScriptProperties().setProperty('styleSheet1_lastTriggerFailedAt', new Date().toISOString());
+  } catch (e2) { /* non-fatal */ }
 }
 
 /* ============================================================
