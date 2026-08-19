@@ -1635,12 +1635,27 @@ function triggerStyleSheet1_() {
         followRedirects: true,
       });
       var code = resp.getResponseCode();
+      var bodyText = resp.getContentText();
+      var parsedOk = false;
       if (code === 200) {
+        // payout-income-log's styleSheet1 now holds a ScriptLock — a busy
+        // lock still responds HTTP 200 but with {ok:false, skipped:true} in
+        // the body (nothing actually ran). Must check body.ok, not just the
+        // HTTP status, or a lock-contention skip silently looks like success
+        // and this retrier never fires again — row sits with stale styling.
+        try {
+          var parsed = JSON.parse(bodyText);
+          parsedOk = parsed && parsed.ok === true;
+        } catch (parseErr) {
+          parsedOk = false; // unparseable body — treat as failure, retry
+        }
+      }
+      if (parsedOk) {
         if (attempt > 1) Logger.log('triggerStyleSheet1_: succeeded on attempt ' + attempt);
         return;
       }
       Logger.log('triggerStyleSheet1_: attempt ' + attempt + '/' + MAX_ATTEMPTS +
-        ' non-200 response ' + code + ' — ' + resp.getContentText().substring(0, 200));
+        ' non-success response (http ' + code + ') — ' + bodyText.substring(0, 200));
     } catch (e) {
       Logger.log('triggerStyleSheet1_: attempt ' + attempt + '/' + MAX_ATTEMPTS + ' error — ' + e);
     }
