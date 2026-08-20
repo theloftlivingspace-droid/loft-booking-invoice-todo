@@ -1084,6 +1084,38 @@ function processPayoutToReceiptForRoom(roomRaw, bookingId, rentalPrice, paidDate
 }
 
 function processPayoutToReceipt(branchId, unitId, bookingId, rentalPrice, paidDateStr) {
+  // Idempotency guard (added 2026-08-20, Nathan flagged duplicate invoices —
+  // e.g. room 209 / Gregory Dunlop had two IVB... invoices for the exact
+  // same amount+booking). Root cause: createApartmenteryInvoice() had no
+  // pre-check, so if this function ran twice for the same invoiceKey — e.g.
+  // the invoice was created but createApartmenteryReceipt() below then threw
+  // (session expiry, timeout), the caller (autoCreateApartmenteryInvoicesAndReceipts)
+  // only logs that to result.errors and never calls setInvoiceDone(), so the
+  // item stays "not done" and the next scheduled run calls this function
+  // again — a second invoice got created for the same amount.
+  //
+  // Guard: if this booking already has an invoice for this exact amount
+  // (same exact-match logic used in backfillApartmenteryInvoiceIds' MULTI-
+  // INVOICE SAFETY handling above), reuse that invoiceId instead of creating
+  // a new one, and skip receipt creation too (can't cheaply verify from here
+  // whether the existing invoice already has a receipt — safer to leave that
+  // for manual/backfill handling than risk a duplicate receipt as well).
+  const existingInvoices = getExistingApartmenteryInvoices_(branchId, unitId, bookingId);
+  const rentalPriceNum = Number(rentalPrice);
+  const dup = existingInvoices.find(function (e) {
+    return Math.abs(Number(e.amount) - rentalPriceNum) < 0.01;
+  });
+  if (dup) {
+    Logger.log(`processPayoutToReceipt: booking ${bookingId} already has invoice ` +
+      `${dup.invoiceId} for amount ${rentalPrice} — reusing it instead of creating a duplicate.`);
+    return {
+      invoiceId: dup.invoiceId,
+      receiptId: null,
+      receiptLocation: null,
+      alreadyExisted: true
+    };
+  }
+
   const invoiceResult = createApartmenteryInvoice(branchId, unitId, bookingId, rentalPrice, paidDateStr);
 
   try {
