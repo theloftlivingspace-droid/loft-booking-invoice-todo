@@ -696,6 +696,18 @@ function doGet_(e) {
     return jsonResponse_(reportStuckApartmenteryInvoices(limit));
   }
 
+  // Read-only live scan (GET only against Apartmentery) for the real
+  // duplicate-invoice bug — see scanForDuplicateAmountInvoicesLive doc
+  // comment in ApartmenteryAutomation.gs. Capped like backfill/report above
+  // to stay inside mobile Safari's connection timeout; pass ?limit= to
+  // override, call again with no params change to keep going (order isn't
+  // guaranteed stable between calls since it iterates a JS object's keys,
+  // so for a full sweep prefer one uncapped run from the Apps Script editor).
+  if (action === 'scanForDuplicateAmountInvoicesLive') {
+    const limit = e.parameter.limit ? parseInt(e.parameter.limit, 10) : 20;
+    return jsonResponse_(scanForDuplicateAmountInvoicesLive(limit));
+  }
+
   // Default: serve HTML webapp
   const template = HtmlService.createTemplateFromFile('Index');
   return template.evaluate()

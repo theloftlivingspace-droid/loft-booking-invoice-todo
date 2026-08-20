@@ -900,6 +900,126 @@ function auditInvoiceApartmenteryIdsForDuplicates() {
 }
 
 /**
+ * Live scan for the actual duplicate-invoice bug (2026-08-20, flagged by
+ * Nathan via room 209 / Gregory Dunlop having two IVB... invoices for the
+ * exact same amount) — DIFFERENT from auditInvoiceApartmenteryIdsForDuplicates
+ * above, which only catches one invoiceId being wired to two invoiceKeys
+ * locally. This instead hits Apartmentery directly (GET only, via
+ * getExistingApartmenteryInvoices_) for every distinct Apartmentery
+ * bookingId we have on file and flags any booking where TWO OR MORE
+ * invoices share the exact same amount — that's the real signature of
+ * processPayoutToReceipt() having been called twice for the same payout
+ * (now guarded, see processPayoutToReceipt's idempotency check), as
+ * opposed to a legitimate multi-invoice booking (split-payout, or an
+ * original + adjustment invoice) where amounts differ.
+ *
+ * Read-only — never creates, edits, or deletes anything on Apartmentery
+ * or in Script Properties. Capped per call (like backfillApartmenteryInvoiceIds)
+ * to stay well inside Safari's ~60s connection timeout when triggered from
+ * mobile; pass a higher limit (or 0 for uncapped) when run from the Apps
+ * Script editor directly.
+ *
+ * @param {number} [maxItems] Caps how many distinct Apartmentery bookings
+ *   get scanned this call. Omit or 0 for no cap.
+ */
+function scanForDuplicateAmountInvoicesLive(maxItems) {
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const todayStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
+  const invoiceItems = getInvoiceToCreate_(ss, todayStr);
+
+  // room + guest context per invoiceKey, for readable output
+  const keyToInfo = {};
+  invoiceItems.forEach(inv => { keyToInfo[inv.invoiceKey] = inv; });
+
+  const aptIdsMap = getProp_(PROP_KEY_INVOICE_APT_IDS);
+
+  // Group invoiceKeys by aptBookingId — a booking can have several
+  // invoiceKeys (split payouts), each recorded as "aptBookingId:invoiceId".
+  const bookingIdToKeys = {}; // aptBookingId -> [{invoiceKey, invoiceId, room}]
+  Object.keys(aptIdsMap).forEach(invoiceKey => {
+    const parts = String(aptIdsMap[invoiceKey] || '').split(':');
+    const aptBookingId = parts[0];
+    const invoiceId = parts[1];
+    if (!aptBookingId) return;
+    if (!bookingIdToKeys[aptBookingId]) bookingIdToKeys[aptBookingId] = [];
+    const info = keyToInfo[invoiceKey];
+    bookingIdToKeys[aptBookingId].push({
+      invoiceKey: invoiceKey,
+      invoiceId: invoiceId || null,
+      room: info ? info.room : null,
+      guest: info ? info.guest : null,
+    });
+  });
+
+  const distinctBookingIds = Object.keys(bookingIdToKeys);
+  const cap = maxItems && maxItems > 0 ? maxItems : Infinity;
+  const startTime = Date.now();
+  const MAX_RUNTIME_MS = 5 * 60 * 1000;
+
+  const flagged = [];
+  let scanned = 0;
+  let sessionExpired = false;
+
+  for (const aptBookingId of distinctBookingIds) {
+    if (scanned >= cap) break;
+    if (Date.now() - startTime > MAX_RUNTIME_MS) break;
+
+    const keys = bookingIdToKeys[aptBookingId];
+    // Need a room to resolve branchId/unitId for the live fetch — every
+    // entry in the group should have the same room, just take the first
+    // one that has it.
+    const roomEntry = keys.find(k => k.room);
+    if (!roomEntry) continue; // can't resolve unit without a room; skip
+    const unit = getApartmenteryUnitForRoom(roomEntry.room);
+    if (!unit) continue;
+
+    scanned++;
+    try {
+      const liveInvoices = getExistingApartmenteryInvoices_(unit.branchId, unit.unitId, aptBookingId);
+
+      const byAmount = {};
+      liveInvoices.forEach(inv => {
+        const amt = Number(inv.amount).toFixed(2);
+        if (!byAmount[amt]) byAmount[amt] = [];
+        byAmount[amt].push(inv.invoiceId);
+      });
+
+      Object.keys(byAmount).forEach(amt => {
+        if (byAmount[amt].length > 1) {
+          flagged.push({
+            aptBookingId: aptBookingId,
+            room: roomEntry.room,
+            guests: keys.map(k => k.guest).filter(Boolean),
+            amount: amt,
+            duplicateInvoiceIds: byAmount[amt],
+            trackedInvoiceKeys: keys.map(k => ({ invoiceKey: k.invoiceKey, invoiceId: k.invoiceId })),
+          });
+        }
+      });
+    } catch (err) {
+      if (isApartmenterySessionExpiredError(err)) {
+        sessionExpired = true;
+        break;
+      }
+      // best-effort scan — log and move on to the next booking
+      Logger.log(`scanForDuplicateAmountInvoicesLive: error scanning booking ${aptBookingId}: ${err.message}`);
+    }
+  }
+
+  Logger.log(`scanForDuplicateAmountInvoicesLive: scanned ${scanned} of ${distinctBookingIds.length} bookings, ` +
+    `found ${flagged.length} with duplicate-amount invoices`);
+
+  return {
+    scannedCount: scanned,
+    totalDistinctBookings: distinctBookingIds.length,
+    remaining: Math.max(0, distinctBookingIds.length - scanned),
+    sessionExpired: sessionExpired,
+    flaggedCount: flagged.length,
+    flagged: flagged,
+  };
+}
+
+/**
  * Repair companion to auditInvoiceApartmenteryIdsForDuplicates(): removes
  * the invoice_apt_ids_v1 entry for EVERY invoiceKey the audit flags (i.e.
  * every invoiceKey sharing an invoiceId with at least one other
