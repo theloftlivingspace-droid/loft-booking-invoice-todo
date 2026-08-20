@@ -708,6 +708,13 @@ function doGet_(e) {
     return jsonResponse_(scanForDuplicateAmountInvoicesLive(limit));
   }
 
+  // One-off (2026-08-20) — see FixDuplicateInvoiceKirillBogdanov20260820.gs
+  // for full context. Repoints invoice_apt_ids_v1 only; does not touch
+  // Apartmentery. Safe to call more than once.
+  if (action === 'fixDuplicateInvoiceKirillBogdanov20260820') {
+    return jsonResponse_(fixDuplicateInvoiceKirillBogdanov20260820());
+  }
+
   // Default: serve HTML webapp
   const template = HtmlService.createTemplateFromFile('Index');
   return template.evaluate()
