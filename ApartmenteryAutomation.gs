@@ -74,6 +74,100 @@ function _dateMinusOneDay_(dateStr) {
 }
 
 /**
+ * dateStr + 1 day. Same UTC-only arithmetic as _dateMinusOneDay_ above.
+ */
+function _datePlusOneDay_(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + 1);
+  return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd');
+}
+
+/**
+ * Builds { roomNum: Set<'YYYY-MM-DD'> } of "phantom" days — single dates
+ * still occupied on apartmentery's calendar by a booking that was
+ * cancelled BEFORE arrival (cancelBooking_ sets checkin===checkout for
+ * that case; see Code.gs). We deliberately do NOT include cancellations
+ * that happened mid-stay (checkin !== checkout there) — those really did
+ * occupy the room for that span, so they must keep blocking it normally.
+ *
+ * We can never delete or move these phantom apartmentery bookings once
+ * an invoice may exist on them (invoices typically attach only after
+ * check-in, but we can't assume none exists — Nathan's hard rule: never
+ * touch a booking that might already have an invoice/receipt on it).
+ * So instead, any NEW booking that would land on one of these dates gets
+ * ITS OWN apartmentery-side dates nudged around the phantom day — the
+ * real Sheet1 checkin/checkout, LINE notify, and pricing are untouched;
+ * only what gets submitted to apartmentery is adjusted, with the real
+ * dates recorded in the booking's `note` field for anyone checking
+ * apartmentery by hand later.
+ */
+function _buildCancelledPhantomDatesByRoom_(items) {
+  const byRoom = {};
+  items.forEach(function (x) {
+    if (!/ยกเลิก|cancel/i.test(x.room)) return;
+    if (!x.checkin || !x.checkout || x.checkin !== x.checkout) return; // mid-stay cancel — real occupancy, skip
+    const rn = roomNum_(x.room);
+    if (!rn) return;
+    if (!byRoom[rn]) byRoom[rn] = new Set();
+    byRoom[rn].add(x.checkin);
+  });
+  return byRoom;
+}
+
+/**
+ * Given a new booking's real [checkin, checkout) range and the room's set
+ * of phantom-cancelled dates, decides what start/end dates to actually
+ * submit to apartmentery to dodge them — WITHOUT touching the phantom
+ * bookings themselves and without changing the real Sheet1 dates.
+ *
+ *  - Phantom lands exactly on the real checkin date → push the
+ *    apartmentery-side startDate forward by 1 day (the new guest still
+ *    really checks in on the original date per Sheet1/LINE/pricing).
+ *  - Phantom lands anywhere else inside the range (mid-stay, or on the
+ *    real checkout date) → pull the apartmentery-side endDate back to the
+ *    day before the EARLIEST such phantom date, same technique already
+ *    used for same-day-turnover collisions above.
+ *  - Multiple phantom dates in range: handled by taking the earliest one
+ *    that matters for each rule above — covers virtually every real case
+ *    (repeat cancellations on one room are rare enough that a second
+ *    pass next run will pick up anything still short after this).
+ *
+ * Returns { startDate, endDate, note } where note is '' unless a dodge
+ * happened, in which case it documents the real dates for manual review.
+ */
+function _dodgeApartmenteryPhantomDates_(roomNum, realCheckin, realCheckout, phantomDatesByRoom) {
+  const phantoms = phantomDatesByRoom[roomNum];
+  if (!phantoms || phantoms.size === 0) {
+    return { startDate: realCheckin, endDate: realCheckout, note: '' };
+  }
+
+  let startDate = realCheckin;
+  let noteParts = [];
+
+  if (phantoms.has(startDate)) {
+    startDate = _datePlusOneDay_(startDate);
+    noteParts.push(`apartmentery startDate dodged +1d (real checkin ${realCheckin})`);
+  }
+
+  // Earliest phantom date strictly inside (startDate, realCheckout] that
+  // still needs dodging via a truncated endDate.
+  let earliestMidPhantom = null;
+  phantoms.forEach(function (d) {
+    if (d <= startDate) return; // handled by the startDate dodge above, or before our range
+    if (d > realCheckout) return; // outside our range
+    if (earliestMidPhantom === null || d < earliestMidPhantom) earliestMidPhantom = d;
+  });
+
+  let endDate = realCheckout;
+  if (earliestMidPhantom !== null) {
+    endDate = _dateMinusOneDay_(earliestMidPhantom);
+    noteParts.push(`apartmentery endDate dodged to ${endDate} (real checkout ${realCheckout})`);
+  }
+
+  return { startDate: startDate, endDate: endDate, note: noteParts.join('; ') };
+}
+
+/**
  * One-time setup: run this ONCE from the Apps Script editor to wire
  * runApartmenteryAutomation() to an hourly trigger. This was previously
  * a manual "go do this yourself" step in the header comment above and
@@ -323,6 +417,13 @@ function autoCreateApartmenteryBookings() {
     incomingByRoom[rn][x.checkin] = x.resId;
   });
 
+  // Rooms cancelled before arrival still occupy a single phantom day on
+  // apartmentery's calendar (see _buildCancelledPhantomDatesByRoom_ comment)
+  // — we can't delete or move those bookings (might already have an
+  // invoice), so any new booking whose range touches one gets dodged
+  // around it instead, apartmentery-side only.
+  const phantomDatesByRoom = _buildCancelledPhantomDatesByRoom_(items);
+
   for (const b of items) {
     if (b.done) { Logger.log(`skip ${b.resId} (${b.room}): already marked done`); continue; }
     // Cancelled bookings ("204 Elegance ยกเลิก") never need an apartmentery booking.
@@ -371,12 +472,29 @@ function autoCreateApartmenteryBookings() {
     // 1 day (Sheet1's real checkout is untouched).
     const roomIncoming = incomingByRoom[roomNum_(b.room)];
     const incomingResId = b.checkout && roomIncoming && roomIncoming[b.checkout];
-    const effectiveEndDate = (incomingResId && incomingResId !== b.resId)
+    let effectiveEndDate = (incomingResId && incomingResId !== b.resId)
       ? _dateMinusOneDay_(b.checkout)
       : (b.checkout || '');
     if (incomingResId && incomingResId !== b.resId) {
       Logger.log(`same-day turnover (back edge): ${b.resId} (${b.room}) checkout ${b.checkout} ` +
         `matches ${incomingResId}'s checkin — sending apartmentery endDate ${effectiveEndDate} instead`);
+    }
+
+    // Phantom-cancelled-day dodge: if a still-cancelled-but-not-deletable
+    // apartmentery booking phantom-occupies a date inside this booking's
+    // range, nudge our own start/end dates around it (Sheet1 stays real).
+    let effectiveStartDate = b.checkin;
+    let dodgeNote = '';
+    if (effectiveEndDate) {
+      const dodged = _dodgeApartmenteryPhantomDates_(
+        roomNum_(b.room), b.checkin, effectiveEndDate, phantomDatesByRoom
+      );
+      if (dodged.note) {
+        effectiveStartDate = dodged.startDate;
+        effectiveEndDate = dodged.endDate;
+        dodgeNote = dodged.note;
+        Logger.log(`phantom-day dodge for ${b.resId} (${b.room}): ${dodgeNote}`);
+      }
     }
 
     Logger.log(`attempting booking for ${b.resId} room ${b.room} guest ${b.guest}`);
@@ -388,10 +506,10 @@ function autoCreateApartmenteryBookings() {
       const guestNameWithChannel = b.channel ? `${b.guest} / ${b.channel}` : b.guest;
 
       const created = createApartmenteryBookingForRoom(b.room, {
-        startDate: b.checkin,
+        startDate: effectiveStartDate,
         endDate: effectiveEndDate,
         guestName: guestNameWithChannel,
-        note: `${b.channel} ${b.resId}`.trim()
+        note: (`${b.channel} ${b.resId}`.trim() + (dodgeNote ? ` | ${dodgeNote}` : '')).trim()
       });
 
       if (created && created.skipped) {
@@ -1114,6 +1232,10 @@ function backfillMissingApartmenteryBookings() {
     if (!incomingByRoom[rn]) incomingByRoom[rn] = {};
     incomingByRoom[rn][x.checkin] = x.resId;
   });
+  // Same phantom-cancelled-day dodge map as autoCreateApartmenteryBookings —
+  // see _buildCancelledPhantomDatesByRoom_/_dodgeApartmenteryPhantomDates_
+  // comments above for why we can't just delete or move those bookings.
+  const phantomDatesByRoom = _buildCancelledPhantomDatesByRoom_(items);
 
   for (const b of items) {
     if (Date.now() - startTime > MAX_RUNTIME_MS) {
@@ -1155,7 +1277,7 @@ function backfillMissingApartmenteryBookings() {
 
     const roomIncoming = incomingByRoom[roomNum_(b.room)];
     const incomingResId = b.checkout && roomIncoming && roomIncoming[b.checkout];
-    const effectiveEndDate = (incomingResId && incomingResId !== b.resId)
+    let effectiveEndDate = (incomingResId && incomingResId !== b.resId)
       ? _dateMinusOneDay_(b.checkout)
       : (b.checkout || '');
     if (incomingResId && incomingResId !== b.resId) {
@@ -1163,15 +1285,31 @@ function backfillMissingApartmenteryBookings() {
         `matches ${incomingResId}'s checkin — sending apartmentery endDate ${effectiveEndDate} instead`);
     }
 
+    // Same phantom-day dodge as autoCreateApartmenteryBookings — see that
+    // function's comment for details.
+    let effectiveStartDate = b.checkin;
+    let dodgeNote = '';
+    if (effectiveEndDate) {
+      const dodged = _dodgeApartmenteryPhantomDates_(
+        roomNum_(b.room), b.checkin, effectiveEndDate, phantomDatesByRoom
+      );
+      if (dodged.note) {
+        effectiveStartDate = dodged.startDate;
+        effectiveEndDate = dodged.endDate;
+        dodgeNote = dodged.note;
+        Logger.log(`[backfill] phantom-day dodge for ${b.resId} (${b.room}): ${dodgeNote}`);
+      }
+    }
+
     Logger.log(`[backfill] attempting booking for ${b.resId} room ${b.room} guest ${b.guest}`);
 
     try {
       const guestNameWithChannel = b.channel ? `${b.guest} / ${b.channel}` : b.guest;
       const created = createApartmenteryBookingForRoom(b.room, {
-        startDate: b.checkin,
+        startDate: effectiveStartDate,
         endDate: effectiveEndDate,
         guestName: guestNameWithChannel,
-        note: `${b.channel} ${b.resId}`.trim()
+        note: (`${b.channel} ${b.resId}`.trim() + (dodgeNote ? ` | ${dodgeNote}` : '')).trim()
       });
 
       if (created && created.skipped) {
