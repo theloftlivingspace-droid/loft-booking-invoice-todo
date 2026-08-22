@@ -626,6 +626,10 @@ function doGet_(e) {
     return jsonResponse_(discoverDeleteActionByResId_(e.parameter.resId || ''));
   }
 
+  if (action === 'findTestBookingCandidates') {
+    return jsonResponse_(findTestBookingCandidates_(e.parameter.limit));
+  }
+
   if (action === 'debugMigrateStrayFiles') {
     return jsonResponse_(migrateStrayRootFiles_());
   }

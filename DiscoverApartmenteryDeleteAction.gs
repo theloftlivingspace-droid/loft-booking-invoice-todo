@@ -200,3 +200,55 @@ function discoverDeleteActionByResId_(resId) {
 
   return discoverBookingDeleteAction_(roomNum_(booking.room), aptBookingId);
 }
+
+/**
+ * Called via GET ?action=findTestBookingCandidates on the live webapp.
+ * Scans Sheet1 for resIds that have an Apartmentery bookingId but no
+ * invoice yet — exactly what discoverDeleteActionByResId_ requires — so
+ * Nathan doesn't have to hunt through Sheet1 by hand on his phone.
+ * Read-only: only reads Sheet1 + the invoice_apt_ids_v1 property, no writes.
+ */
+function findTestBookingCandidates_(limit) {
+  const max = limit ? Number(limit) : 5;
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
+  const data = src.getDataRange().getValues();
+  const header = data[0];
+  const idx = indexMap_(header, ['ResId', 'เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์', APARTMENTERY_BOOKING_ID_COL_HEADER]);
+
+  if (idx.ResId < 0 || idx[APARTMENTERY_BOOKING_ID_COL_HEADER] < 0) {
+    return { ok: false, error: 'required columns missing (ResId / Apartmentery Booking ID)' };
+  }
+
+  const candidates = [];
+  for (let i = 1; i < data.length && candidates.length < max; i++) {
+    const resId = String(data[i][idx.ResId] || '').trim();
+    if (!resId) continue;
+
+    const room = String(data[i][idx['เลขห้อง']] || '').trim();
+    if (/ยกเลิก|cancel/i.test(room)) continue; // skip cancelled rows
+
+    const aptBookingId = String(data[i][idx[APARTMENTERY_BOOKING_ID_COL_HEADER]] || '').trim();
+    if (!aptBookingId) continue; // no apartmentery booking at all yet — nothing to inspect
+
+    if (isBookingIdInvoiced_(aptBookingId)) continue; // already invoiced — not what we want for this diagnostic
+
+    candidates.push({
+      resId,
+      room: roomNum_(room),
+      guest: idx['ชื่อแขก'] >= 0 ? String(data[i][idx['ชื่อแขก']] || '').trim() : '',
+      checkIn: idx['เช็คอิน'] >= 0 ? formatCellDate_(data[i][idx['เช็คอิน']]) : '',
+      checkOut: idx['เช็คเอาท์'] >= 0 ? formatCellDate_(data[i][idx['เช็คเอาท์']]) : '',
+      aptBookingId,
+    });
+  }
+
+  return {
+    ok: true,
+    count: candidates.length,
+    candidates,
+    note: candidates.length === 0
+      ? 'ไม่พบ resId ที่มี Apartmentery bookingId แต่ยังไม่มี invoice ตอนนี้ — อาจต้องรอ autoCreateApartmenteryBookings รอบถัดไป (รันทุกชั่วโมง) จับบุ๊คกิ้งใหม่ก่อน'
+      : 'หยิบ resId ตัวใดตัวหนึ่งไปใส่ใน &resId=... ของ action=discoverDeleteAction ต่อได้เลย',
+  };
+}
