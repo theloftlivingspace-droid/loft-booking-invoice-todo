@@ -183,6 +183,60 @@ function _apartmenteryFetch_(path, options) {
   return response;
 }
 
+/**
+ * Deletes a booking on apartmentery.com that has never been invoiced.
+ *
+ * VERIFIED against a real request captured via inspectDeleteRequest_
+ * (DiscoverApartmenteryDeleteAction.gs), 2026-08-23, against a real booking
+ * (bookingId 306018, room 205): apartmentery's own admin UI calls
+ *   $.post("/user/branch/{branchId}/unit/{unitId}/booking/{bookingId}/delete", callback)
+ * with NO request body and NO CSRF token — csrfHits was empty and
+ * setCookie was null on the edit page that contains this call, so the only
+ * thing authenticating the request is the existing session cookie
+ * (identical to every other _apartmenteryFetch_ call in this file).
+ * jQuery's $.post adds `X-Requested-With: XMLHttpRequest` automatically;
+ * that header is replicated below to match the real client exactly, in
+ * case the server checks for it.
+ *
+ * NEVER call this against a bookingId that has an invoice — that's what
+ * isBookingIdInvoiced_() in RoomMove.gs exists to check before this is
+ * ever reached (see moveRoomBeforeCheckin_, the only caller). This
+ * function does not re-check that itself; it trusts the caller, exactly
+ * like updateApartmenteryBookingEndDate does for its own precondition.
+ *
+ * NOT YET ACTUALLY EXECUTED — the capture above only observed the edit
+ * page's markup (a GET), never submitted the POST itself. First real call
+ * should be watched closely (check Logger output / apartmentery.com
+ * directly afterward) rather than trusted blind on the very first run.
+ */
+function deleteApartmenteryBooking_(roomRaw, bookingId) {
+  const unit = getApartmenteryUnitForRoom(roomRaw);
+  if (!unit) {
+    return { ok: false, error: `no unit mapping for room ${roomRaw}` };
+  }
+  const path = `/user/branch/${unit.branchId}/unit/${unit.unitId}/booking/${bookingId}/delete`;
+
+  const response = _apartmenteryFetch_(path, {
+    method: 'post',
+    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+  });
+
+  const code = response.getResponseCode();
+  // The real client doesn't inspect the response body at all — it just
+  // redirects on the .post() success callback firing, i.e. any non-error
+  // HTTP status. Treat 2xx/3xx as success, same bar the real UI uses.
+  if (code >= 200 && code < 400) {
+    return { ok: true, bookingId, room: roomRaw, httpStatus: code };
+  }
+  return {
+    ok: false,
+    error: `delete request returned HTTP ${code}`,
+    bookingId,
+    room: roomRaw,
+    body: response.getContentText().substring(0, 500),
+  };
+}
+
 /** True if an error thrown by _apartmenteryFetch_ was a session-expiry, not some other failure. */
 function isApartmenterySessionExpiredError(err) {
   return !!(err && err.message && err.message.indexOf('SESSION_EXPIRED:') === 0);

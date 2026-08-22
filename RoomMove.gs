@@ -210,39 +210,51 @@ function moveRoomBeforeCheckin_(src, booking, newRoom, existingAptBookingId) {
 }
 
 /**
- * See "ORPHANED APARTMENTERY BOOKING" note in the file header — no delete
- * function exists anywhere in ApartmenteryClient.gs, so this does NOT touch
- * Apartmentery at all. Sends a 1:1 LINE alert to Nathan asking him to
- * delete the old booking manually, reusing the exact same /api/send-admin-alert
- * call shape _notifyLineSessionFailure_() already uses (ApartmenteryClient.gs:199-214).
+ * See "ORPHANED APARTMENTERY BOOKING" note in the file header — now uses
+ * the real, verified deleteApartmenteryBooking_() (ApartmenteryClient.gs),
+ * captured from apartmentery.com's own admin UI via inspectDeleteRequest_.
+ * Falls back to the manual-deletion LINE alert only if the delete call
+ * itself fails, so nothing is silently lost either way.
  */
 function handleOrphanedPreInvoiceAptBooking_(booking, aptBookingId) {
+  const room = roomNum_(booking.room);
+  let deleteResult;
+  try {
+    deleteResult = deleteApartmenteryBooking_(room, aptBookingId);
+  } catch (err) {
+    deleteResult = { ok: false, error: err.message };
+  }
+
+  if (deleteResult.ok) {
+    Logger.log(`handleOrphanedPreInvoiceAptBooking_: deleted apartmentery bookingId ${aptBookingId} (resId ${booking.resId}, old room ${room})`);
+    return;
+  }
+
+  // delete failed — fall back to alerting for manual cleanup, same as before
+  Logger.log(`handleOrphanedPreInvoiceAptBooking_: deleteApartmenteryBooking_ failed (${deleteResult.error}) — falling back to manual-deletion alert.`);
   try {
     const props = PropertiesService.getScriptProperties();
     const botUrl = props.getProperty('BOT_URL') || 'https://hotel-line-bot.onrender.com';
     const adminToken = props.getProperty('ADMIN_TOKEN');
     if (!adminToken) {
-      Logger.log('handleOrphanedPreInvoiceAptBooking_: ADMIN_TOKEN not set — cannot send alert. ' +
-        `Manual cleanup needed: apartmentery bookingId ${aptBookingId} (resId ${booking.resId}, ` +
-        `old room ${roomNum_(booking.room)}) has no invoice and is now orphaned — delete it by hand.`);
+      Logger.log(`ADMIN_TOKEN not set — cannot send alert. Manual cleanup needed: apartmentery bookingId ${aptBookingId} (resId ${booking.resId}, old room ${room}).`);
       return;
     }
     UrlFetchApp.fetch(botUrl + '/api/send-admin-alert', {
       method: 'post',
       contentType: 'application/json',
       payload: JSON.stringify({
-        note: '🗑️ ต้องลบ booking ค้างบน Apartmentery ด้วยตนเอง\n' +
+        note: '🗑️ ลบ booking ค้างบน Apartmentery อัตโนมัติไม่สำเร็จ ต้องลบด้วยตนเอง\n' +
           `ResId: ${booking.resId}\n` +
           `Apartmentery bookingId: ${aptBookingId}\n` +
-          `ห้องเดิม: ${roomNum_(booking.room)}\n` +
-          `เหตุผล: ย้ายห้องก่อนเช็คอิน ยังไม่มี invoice — Sheet1 อัปเดตห้องใหม่ให้แล้ว ` +
-          'แต่ระบบไม่มีฟังก์ชันลบ booking บน Apartmentery อัตโนมัติ ต้องลบเองที่ apartmentery.com',
+          `ห้องเดิม: ${room}\n` +
+          `Error: ${deleteResult.error}`,
       }),
       headers: { 'x-admin-token': adminToken },
       muteHttpExceptions: true,
     });
   } catch (e) {
-    Logger.log(`handleOrphanedPreInvoiceAptBooking_ error: ${e.message} — apartmentery bookingId ${aptBookingId} (resId ${booking.resId}) still needs manual deletion.`);
+    Logger.log(`handleOrphanedPreInvoiceAptBooking_ alert fallback also failed: ${e.message} — apartmentery bookingId ${aptBookingId} (resId ${booking.resId}) still needs manual deletion.`);
   }
 }
 
