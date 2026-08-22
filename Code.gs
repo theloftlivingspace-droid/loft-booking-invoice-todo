@@ -630,6 +630,10 @@ function doGet_(e) {
     return jsonResponse_(findTestBookingCandidates_(e.parameter.limit));
   }
 
+  if (action === 'inspectDeleteRequest') {
+    return jsonResponse_(inspectDeleteRequestByResId_(e.parameter.resId || ''));
+  }
+
   if (action === 'debugMigrateStrayFiles') {
     return jsonResponse_(migrateStrayRootFiles_());
   }

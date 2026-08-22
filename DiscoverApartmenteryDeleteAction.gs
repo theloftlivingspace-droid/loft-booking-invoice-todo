@@ -252,3 +252,82 @@ function findTestBookingCandidates_(limit) {
       : 'หยิบ resId ตัวใดตัวหนึ่งไปใส่ใน &resId=... ของ action=discoverDeleteAction ต่อได้เลย',
   };
 }
+
+/**
+ * Deeper pass, called via GET ?action=inspectDeleteRequest&room=X&bookingId=Y
+ * (or &resId=... to resolve room/bookingId automatically, same as
+ * discoverDeleteActionByResId_). Still read-only — one more GET on the edit
+ * page, nothing submitted.
+ *
+ * discoverBookingDeleteAction_'s regex only catches HTML forms/links/
+ * data-method attrs; the real delete call turned out to be a jQuery
+ * $.post(...) in a <script> block, which needs different handling:
+ *   1. pull out the full $.post(...) statement (not just the URL) to see
+ *      what data/headers it sends
+ *   2. scan the whole page (not just <input> tags) for "csrf" case-
+ *      insensitively, since Play Framework commonly injects the token as
+ *      a JS variable or meta tag, not a form field
+ *   3. list response cookies from the fetch itself — Play's CSRF filter
+ *      often relies on a cookie (e.g. PLAY_CSRF_TOKEN) matched against a
+ *      header/param on the actual request
+ */
+function inspectDeleteRequest_(roomRaw, bookingId) {
+  const unit = getApartmenteryUnitForRoom(roomRaw);
+  if (!unit) return { ok: false, error: `no unit mapping for room ${roomRaw}` };
+  const { branchId, unitId } = unit;
+  const path = `/user/branch/${branchId}/unit/${unitId}/booking/${bookingId}/edit`;
+
+  const response = _apartmenteryFetch_(path, { method: 'get' });
+  const code = response.getResponseCode();
+  if (code !== 200) return { ok: false, error: `HTTP ${code} fetching ${path}` };
+
+  const html = response.getContentText();
+
+  // 1. full $.post(...) statement(s) targeting a /delete path
+  const postCalls = [];
+  const postRe = /\$\.post\(\s*["']([^"']*\/delete[^"']*)["']/gi;
+  let m;
+  while ((m = postRe.exec(html)) !== null) {
+    // grab a generous window forward to capture the data object / callbacks
+    const snippet = html.substring(m.index, Math.min(html.length, m.index + 1000));
+    postCalls.push({ url: m[1], snippet });
+  }
+
+  // 2. case-insensitive csrf scan, whole page, with context
+  const csrfHits = [];
+  const csrfRe = /csrf/gi;
+  while ((m = csrfRe.exec(html)) !== null && csrfHits.length < 12) {
+    const start = Math.max(0, m.index - 120);
+    const end = Math.min(html.length, m.index + 120);
+    csrfHits.push(html.substring(start, end).replace(/\s+/g, ' ').trim());
+  }
+
+  // 3. response cookies from this fetch
+  let headers = {};
+  try {
+    headers = response.getAllHeaders();
+  } catch (e) {
+    headers = { _error: e.message };
+  }
+  const setCookie = headers['Set-Cookie'] || headers['set-cookie'] || null;
+
+  return {
+    ok: true,
+    path,
+    postCalls,
+    csrfHits,
+    setCookie,
+  };
+}
+
+/** Mobile wrapper — GET ?action=inspectDeleteRequest&resId=... */
+function inspectDeleteRequestByResId_(resId) {
+  if (!resId) return { ok: false, error: 'resId required' };
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
+  const booking = findBookingByResId_(src, resId);
+  if (!booking) return { ok: false, error: `resId not found: ${resId}` };
+  const aptBookingId = getApartmenteryBookingId_(resId);
+  if (!aptBookingId) return { ok: false, error: `resId ${resId} has no Apartmentery bookingId` };
+  return inspectDeleteRequest_(roomNum_(booking.room), aptBookingId);
+}
