@@ -83,6 +83,9 @@ function doPost(e) {
     if (action === 'updateCheckout') {
       return jsonResponse_(updateCheckoutDate_(body));
     }
+    if (action === 'moveGuestRoom') {
+      return jsonResponse_(moveGuestRoom_(body));
+    }
 
     return jsonResponse_({ ok: false, error: 'Unknown POST action: ' + action });
   } catch (err) {
@@ -617,6 +620,10 @@ function doGet_(e) {
 
   if (action === 'debugScanDocsFolder') {
     return jsonResponse_(debugScanDocsFolder_());
+  }
+
+  if (action === 'discoverDeleteAction') {
+    return jsonResponse_(discoverDeleteActionByResId_(e.parameter.resId || ''));
   }
 
   if (action === 'debugMigrateStrayFiles') {
