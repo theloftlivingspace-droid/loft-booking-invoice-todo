@@ -172,3 +172,31 @@ function _scanHtmlForDeleteSignals_(html, bookingId) {
 
   return findings;
 }
+
+/**
+ * Mobile-friendly wrapper — called via GET ?action=discoverDeleteAction&resId=...
+ * on the live "checkinout"/"todo" webapp URL. Looks up room + Apartmentery
+ * bookingId from the resId automatically (Nathan only needs to type one
+ * value on his phone), and refuses to run against a booking that already
+ * has an invoice — the whole point of this diagnostic is a SAFE, pre-invoice
+ * booking; running it against an invoiced one isn't dangerous (still
+ * read-only) but isn't what it's for, so it's blocked to avoid confusion.
+ */
+function discoverDeleteActionByResId_(resId) {
+  if (!resId) return { ok: false, error: 'resId required — add &resId=... to the URL' };
+
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
+  const booking = findBookingByResId_(src, resId);
+  if (!booking) return { ok: false, error: `resId not found: ${resId}` };
+
+  const aptBookingId = getApartmenteryBookingId_(resId);
+  if (!aptBookingId) {
+    return { ok: false, error: `resId ${resId} has no Apartmentery bookingId yet — nothing to inspect. Pick one that already shows an id in the "Apartmentery Booking ID" column of Sheet1.` };
+  }
+  if (isBookingIdInvoiced_(aptBookingId)) {
+    return { ok: false, error: `resId ${resId} (bookingId ${aptBookingId}) already has an invoice — pick a resId with no invoice yet for this diagnostic.` };
+  }
+
+  return discoverBookingDeleteAction_(roomNum_(booking.room), aptBookingId);
+}

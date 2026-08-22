@@ -622,6 +622,10 @@ function doGet_(e) {
     return jsonResponse_(debugScanDocsFolder_());
   }
 
+  if (action === 'discoverDeleteAction') {
+    return jsonResponse_(discoverDeleteActionByResId_(e.parameter.resId || ''));
+  }
+
   if (action === 'debugMigrateStrayFiles') {
     return jsonResponse_(migrateStrayRootFiles_());
   }
