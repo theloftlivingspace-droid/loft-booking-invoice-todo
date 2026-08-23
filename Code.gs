@@ -83,12 +83,6 @@ function doPost(e) {
     if (action === 'updateCheckout') {
       return jsonResponse_(updateCheckoutDate_(body));
     }
-    if (action === 'updateCheckin') {
-      return jsonResponse_(updateCheckinDate_(body));
-    }
-    if (action === 'moveGuestRoom') {
-      return jsonResponse_(moveGuestRoom_(body));
-    }
 
     return jsonResponse_({ ok: false, error: 'Unknown POST action: ' + action });
   } catch (err) {
@@ -509,94 +503,6 @@ function updateCheckoutDate_(body) {
   }, syncResult);
 }
 
-/**
- * Edit the check-in date of a booking that hasn't checked in yet.
- * Mirrors updateCheckoutDate_ above but:
- *  - writes the 'เช็คอิน' column instead of 'เช็คเอาท์'
- *  - conflict check runs the opposite direction (pulling check-in EARLIER
- *    can collide with another booking's checkout in that room)
- *  - blocks the edit outright if CheckStatus already shows this resId as
- *    checked in (frontend already hides the button once checked in, but
- *    this is the server-side guard in case the API is called directly)
- *  - does NOT sync to Apartmentery — only updateApartmenteryBookingEndDate
- *    exists in ApartmenteryClient.gs; there's no reverse-engineered form
- *    field for changing a booking's start date yet. Sheet1 updates
- *    immediately; Apartmentery has to be corrected there by hand until
- *    that sync function gets built (same pattern as apartmenteryNote below).
- */
-function updateCheckinDate_(body) {
-  const resId = String(body.resId || '').trim();
-  const newCheckin = String(body.newCheckin || '').trim();
-  if (!resId) return { ok: false, error: 'resId required' };
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(newCheckin)) return { ok: false, error: 'newCheckin must be YYYY-MM-DD' };
-
-  const statusMap = getCheckStatusMap_();
-  if (statusMap[resId] && statusMap[resId].checkedInAt) {
-    return { ok: false, error: 'already checked in — cannot edit check-in date' };
-  }
-
-  const ss  = SpreadsheetApp.openById(SOURCE_SHEET_ID);
-  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
-  if (!src) return { ok: false, error: 'Sheet1 not found' };
-
-  const data   = src.getDataRange().getValues();
-  const header = data[0];
-  const idx    = indexMap_(header, ['ResId', 'เลขห้อง', 'เช็คเอาท์', 'ชื่อแขก', 'เช็คอิน']);
-  if (idx.ResId < 0 || idx['เช็คอิน'] < 0) return { ok: false, error: 'required columns not found' };
-
-  var rowIdx = -1, room = '', guest = '', oldCheckin = '', checkout = '';
-  for (var i = 1; i < data.length; i++) {
-    if (String(data[i][idx.ResId] || '').trim() === resId) {
-      rowIdx = i;
-      room = String(data[i][idx['เลขห้อง']] || '').trim();
-      guest = idx['ชื่อแขก'] >= 0 ? String(data[i][idx['ชื่อแขก']] || '').trim() : '';
-      oldCheckin = formatCellDate_(data[i][idx['เช็คอิน']]);
-      checkout = idx['เช็คเอาท์'] >= 0 ? formatCellDate_(data[i][idx['เช็คเอาท์']]) : '';
-      break;
-    }
-  }
-  if (rowIdx === -1) return { ok: false, error: 'resId not found: ' + resId };
-  if (/ยกเลิก|cancel/i.test(room)) return { ok: false, error: 'booking is cancelled' };
-  if (newCheckin === oldCheckin) return { ok: false, error: 'newCheckin is the same as current check-in' };
-  if (checkout && newCheckin >= checkout) return { ok: false, error: 'newCheckin must be before checkout' };
-
-  // Conflict check — only matters when pulling check-in earlier: another
-  // booking on the same room could already end somewhere inside
-  // (newCheckin, oldCheckin].
-  if (newCheckin < oldCheckin) {
-    const rn = roomNum_(room);
-    for (var j = 1; j < data.length; j++) {
-      if (j === rowIdx) continue;
-      const otherRoom = String(data[j][idx['เลขห้อง']] || '').trim();
-      if (/ยกเลิก|cancel/i.test(otherRoom)) continue;
-      if (roomNum_(otherRoom) !== rn) continue;
-      const otherCheckout = idx['เช็คเอาท์'] >= 0 ? formatCellDate_(data[j][idx['เช็คเอาท์']]) : '';
-      if (!otherCheckout) continue;
-      if (otherCheckout > newCheckin && otherCheckout <= oldCheckin) {
-        return {
-          ok: false,
-          error: 'conflict',
-          conflict: {
-            resId: String(data[j][idx.ResId] || '').trim(),
-            guest: idx['ชื่อแขก'] >= 0 ? String(data[j][idx['ชื่อแขก']] || '').trim() : '',
-            checkout: otherCheckout,
-          }
-        };
-      }
-    }
-  }
-
-  src.getRange(rowIdx + 1, idx['เช็คอิน'] + 1).setValue(newCheckin);
-  triggerStyleSheet1_();
-
-  return {
-    ok: true, resId: resId, room: room, guest: guest, checkout: checkout,
-    oldCheckin: oldCheckin, newCheckin: newCheckin,
-    apartmenterySynced: false,
-    apartmenteryNote: 'ยังไม่รองรับ sync วันเช็คอินไป Apartmentery อัตโนมัติ (มีแต่ sync วันเช็คเอาท์) — ต้องไปแก้เองใน Apartmentery',
-  };
-}
-
 function getCheckStatusMap_() {
   const sheet = getOrCreateStatusSheet_();
   const data = sheet.getDataRange().getValues();
@@ -713,26 +619,6 @@ function doGet_(e) {
     return jsonResponse_(debugScanDocsFolder_());
   }
 
-  if (action === 'discoverDeleteAction') {
-    return jsonResponse_(discoverDeleteActionByResId_(e.parameter.resId || ''));
-  }
-
-  if (action === 'findTestBookingCandidates') {
-    return jsonResponse_(findTestBookingCandidates_(e.parameter.limit));
-  }
-
-  if (action === 'inspectDeleteRequest') {
-    return jsonResponse_(inspectDeleteRequestByResId_(e.parameter.resId || ''));
-  }
-
-  if (action === 'runAutoCreateApartmenteryBookingsNow') {
-    // Same function the hourly trigger calls — this just runs it early
-    // instead of waiting, for ALL currently-eligible rows (not only one
-    // resId). No new behavior invented; just an on-demand invocation of
-    // existing production automation.
-    return jsonResponse_(autoCreateApartmenteryBookings());
-  }
-
   if (action === 'debugMigrateStrayFiles') {
     return jsonResponse_(migrateStrayRootFiles_());
   }
@@ -803,20 +689,24 @@ function doGet_(e) {
     return jsonResponse_(debugFetchInvoiceListHtml_(unit.branchId, unit.unitId, bookingId));
   }
 
-  // Read-only live scan against Apartmentery — same reasoning as
-  // backfillApartmenteryInvoiceIds above about mobile connection timeouts,
-  // but this one pulls one calendar page per ROOM (not per invoice), so
-  // it's already small/fast enough (11 rooms) to not need a limit param.
+  // Read-only against Apartmentery — one fetch per unique bookingId
+  // (the booking's actual edit form, not the calendar view — see
+  // auditApartmenteryCheckoutDrift_'s comment for why that distinction
+  // matters). Same mobile-timeout batching as backfillApartmenteryInvoiceIds:
+  // pass ?limit= to override the default, call again using the returned
+  // "remaining" count to know when you're done.
   if (action === 'auditApartmenteryCheckoutDrift') {
-    return jsonResponse_({ ok: true, drift: auditApartmenteryCheckoutDrift_() });
+    const limit = e.parameter.limit ? parseInt(e.parameter.limit, 10) : 40;
+    return jsonResponse_(Object.assign({ ok: true }, auditApartmenteryCheckoutDrift_(limit)));
   }
 
   // Writes to Apartmentery (via the same collision-safe
   // updateApartmenteryBookingEndDateForRoom the live pencil-edit path
   // uses) — call auditApartmenteryCheckoutDrift first to see what this
-  // would change before triggering it.
+  // would change before triggering it. Same ?limit= batching as above.
   if (action === 'fixApartmenteryCheckoutDrift') {
-    return jsonResponse_({ ok: true, results: fixApartmenteryCheckoutDrift_() });
+    const limit = e.parameter.limit ? parseInt(e.parameter.limit, 10) : 40;
+    return jsonResponse_(Object.assign({ ok: true }, fixApartmenteryCheckoutDrift_(limit)));
   }
 
   // Read-only diagnostic — same resolution logic as backfillApartmenteryInvoiceIds
