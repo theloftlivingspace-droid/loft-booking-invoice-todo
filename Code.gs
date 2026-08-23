@@ -689,20 +689,24 @@ function doGet_(e) {
     return jsonResponse_(debugFetchInvoiceListHtml_(unit.branchId, unit.unitId, bookingId));
   }
 
-  // Read-only live scan against Apartmentery — same reasoning as
-  // backfillApartmenteryInvoiceIds above about mobile connection timeouts,
-  // but this one pulls one calendar page per ROOM (not per invoice), so
-  // it's already small/fast enough (11 rooms) to not need a limit param.
+  // Read-only against Apartmentery — one fetch per unique bookingId
+  // (the booking's actual edit form, not the calendar view — see
+  // auditApartmenteryCheckoutDrift_'s comment for why that distinction
+  // matters). Same mobile-timeout batching as backfillApartmenteryInvoiceIds:
+  // pass ?limit= to override the default, call again using the returned
+  // "remaining" count to know when you're done.
   if (action === 'auditApartmenteryCheckoutDrift') {
-    return jsonResponse_({ ok: true, drift: auditApartmenteryCheckoutDrift_() });
+    const limit = e.parameter.limit ? parseInt(e.parameter.limit, 10) : 40;
+    return jsonResponse_(Object.assign({ ok: true }, auditApartmenteryCheckoutDrift_(limit)));
   }
 
   // Writes to Apartmentery (via the same collision-safe
   // updateApartmenteryBookingEndDateForRoom the live pencil-edit path
   // uses) — call auditApartmenteryCheckoutDrift first to see what this
-  // would change before triggering it.
+  // would change before triggering it. Same ?limit= batching as above.
   if (action === 'fixApartmenteryCheckoutDrift') {
-    return jsonResponse_({ ok: true, results: fixApartmenteryCheckoutDrift_() });
+    const limit = e.parameter.limit ? parseInt(e.parameter.limit, 10) : 40;
+    return jsonResponse_(Object.assign({ ok: true }, fixApartmenteryCheckoutDrift_(limit)));
   }
 
   // Read-only diagnostic — same resolution logic as backfillApartmenteryInvoiceIds
