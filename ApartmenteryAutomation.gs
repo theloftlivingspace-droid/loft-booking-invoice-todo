@@ -106,6 +106,14 @@ function _buildCancelledPhantomDatesByRoom_(items) {
   items.forEach(function (x) {
     if (!/ยกเลิก|cancel/i.test(x.room)) return;
     if (!x.checkin || !x.checkout || x.checkin !== x.checkout) return; // mid-stay cancel — real occupancy, skip
+    // Only counts as a real apartmentery-side blocker if a booking was
+    // actually created there in the first place. Found 2026-08-23:
+    // Marouane Boumaiz's cancelled row (203, 16 Aug) has an empty
+    // apartmenteryBookingId — cancelled before autoCreateApartmenteryBookings
+    // ever ran for it, so nothing was ever on apartmentery's calendar to
+    // collide with. Without this check the dodge logic treated it as a
+    // blocker anyway and over-truncated a real booking's range needlessly.
+    if (!x.apartmenteryBookingId) return;
     const rn = roomNum_(x.room);
     if (!rn) return;
     if (!byRoom[rn]) byRoom[rn] = new Set();

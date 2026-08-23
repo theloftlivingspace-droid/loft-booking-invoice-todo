@@ -354,12 +354,27 @@ function _getCancelledPhantomDatesForRoom_(targetRoomNum) {
   const src = ss.getSheetByName('Sheet1');
   const data = src.getDataRange().getValues();
   const header = data[0];
-  const idx = indexMap_(header, ['เลขห้อง', 'เช็คอิน', 'เช็คเอาท์']);
+  const idx = indexMap_(header, ['เลขห้อง', 'เช็คอิน', 'เช็คเอาท์', APARTMENTERY_BOOKING_ID_COL_HEADER]);
   if (idx['เลขห้อง'] < 0) return set;
   for (let i = 1; i < data.length; i++) {
     const room = String(data[i][idx['เลขห้อง']] || '').trim();
     if (!/ยกเลิก|cancel/i.test(room)) continue;
     if (roomNum_(room) !== targetRoomNum) continue;
+    // A cancelled row only actually occupies a day on apartmentery's
+    // calendar if an apartmentery booking was ever created for it in the
+    // first place (has a bookingId). Found 2026-08-23: Marouane Boumaiz's
+    // cancelled-before-arrival row (203, 16 Aug) has an EMPTY bookingId —
+    // it was cancelled in Sheet1 before autoCreateApartmenteryBookings
+    // ever ran for it, so there was never anything on apartmentery's
+    // calendar to collide with. The dodge logic doesn't know that and
+    // was treating it as a real blocker anyway, truncating Hasan
+    // Workman's extension all the way down to 15 Aug instead of the
+    // correct 23 Aug (only Jerry Ritschard's 24 Aug — bookingId 329281,
+    // a real apartmentery booking that got cancelled after creation —
+    // actually blocks anything).
+    const bookingId = idx[APARTMENTERY_BOOKING_ID_COL_HEADER] >= 0
+      ? String(data[i][idx[APARTMENTERY_BOOKING_ID_COL_HEADER]] || '').trim() : '';
+    if (!bookingId) continue;
     const ci = idx['เช็คอิน'] >= 0 ? formatCellDate_(data[i][idx['เช็คอิน']]) : '';
     const co = idx['เช็คเอาท์'] >= 0 ? formatCellDate_(data[i][idx['เช็คเอาท์']]) : '';
     if (ci && co && ci === co) set.add(ci);
