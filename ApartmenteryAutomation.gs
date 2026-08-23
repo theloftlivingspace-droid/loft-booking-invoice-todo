@@ -1515,6 +1515,128 @@ function findCandidatesForUnresolved20260716() {
   });
 }
 
+/**
+ * READ-ONLY. Finds active (non-cancelled) Sheet1 bookings whose checkout
+ * date no longer matches what's actually on apartmentery's calendar for
+ * their stored bookingId — the "guest extended their stay and Sheet1 got
+ * updated, but nothing pushed the new date to apartmentery" gap. Found
+ * 2026-08-23: room 203 / Hasan Workman extended 21→26 Aug, the-loft-admin
+ * showed 26 Aug correctly, apartmentery still showed 21 Aug — whatever
+ * updated Sheet1 that time never called syncApartmenteryCheckoutDate_ /
+ * updateCheckoutDate_, so the push to apartmentery never happened.
+ *
+ * checkin drift is logged too but NOT auto-fixed by the companion below —
+ * a changed checkin usually means a room/date swap, which needs a human
+ * to confirm it isn't a genuine double-booking before anything touches
+ * apartmentery. Checkout drift is safe to auto-fix the same way
+ * earlyCheckout_/updateCheckoutDate_ already do it live.
+ *
+ * Repair companion: fixApartmenteryCheckoutDrift_().
+ */
+function auditApartmenteryCheckoutDrift_() {
+  Logger.log('auditApartmenteryCheckoutDrift_: READ-ONLY — pulling calendars for all rooms...');
+
+  const byBookingId = {};
+  Object.keys(ROOM_TO_UNIT_ID).forEach(room => {
+    const unit = getApartmenteryUnitForRoom(room);
+    if (!unit) return;
+    const path = `/user/branch/${unit.branchId}/unit/${unit.unitId}/booking`;
+    let html;
+    try {
+      html = _apartmenteryFetch_(path, { method: 'get' }).getContentText();
+    } catch (e) {
+      Logger.log(`auditApartmenteryCheckoutDrift_: FAILED to fetch calendar for room ${room}: ${e.message}`);
+      return;
+    }
+    // Same block shape as auditAllApartmenteryBookingIds's blockRe, plus
+    // an `end:` capture (see the comment on _fetchApartmenteryUnitCalendarEvents_
+    // near the top of this file for the raw HTML shape).
+    const blockRe = /\{\s*title:\s*'((?:[^'\\]|\\.)*)'[\s\S]*?start:\s*'([^']*)'[\s\S]*?end:\s*'([^']*)'[\s\S]*?url:\s*'([^']*)'\s*\}/g;
+    let m;
+    while ((m = blockRe.exec(html)) !== null) {
+      const idMatch = m[4].match(/\/booking\/(\d+)/);
+      if (!idMatch) continue;
+      const bookingId = idMatch[1];
+      if (byBookingId[bookingId]) continue; // same event can repeat across rendered months
+      byBookingId[bookingId] = {
+        room: room,
+        title: m[1],
+        start: _apartmenteryCalendarDateToIso_(m[2]),
+        end: _apartmenteryCalendarDateToIso_(m[3])
+      };
+    }
+  });
+  Logger.log(`auditApartmenteryCheckoutDrift_: pulled ${Object.keys(byBookingId).length} unique bookingIds.`);
+
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const src = ss.getSheetByName('Sheet1');
+  const data = src.getDataRange().getValues();
+  const header = data[0];
+  const idx = indexMap_(header, ['ResId', 'เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์', APARTMENTERY_BOOKING_ID_COL_HEADER]);
+  if (idx.ResId < 0 || idx[APARTMENTERY_BOOKING_ID_COL_HEADER] < 0) {
+    Logger.log('auditApartmenteryCheckoutDrift_: required columns not found — aborting.');
+    return [];
+  }
+
+  const drift = [];
+  for (let i = 1; i < data.length; i++) {
+    const room = String(data[i][idx['เลขห้อง']] || '').trim();
+    if (/ยกเลิก|cancel/i.test(room)) continue; // cancelled — handled separately, not a drift case
+    const resId = String(data[i][idx.ResId] || '').trim();
+    const bookingId = String(data[i][idx[APARTMENTERY_BOOKING_ID_COL_HEADER]] || '').trim();
+    if (!resId || !bookingId) continue;
+    const found = byBookingId[bookingId];
+    if (!found) continue; // dead bookingId — auditAllApartmenteryBookingIds already covers this
+
+    const sheetCheckin = idx['เช็คอิน'] >= 0 ? formatCellDate_(data[i][idx['เช็คอิน']]) : '';
+    const sheetCheckout = idx['เช็คเอาท์'] >= 0 ? formatCellDate_(data[i][idx['เช็คเอาท์']]) : '';
+    const guest = idx['ชื่อแขก'] >= 0 ? String(data[i][idx['ชื่อแขก']] || '').trim() : '';
+
+    if (sheetCheckin && found.start && sheetCheckin !== found.start) {
+      Logger.log(`CHECKIN DRIFT (not auto-fixed — needs human review): resId=${resId} room=${room} guest="${guest}" ` +
+        `Sheet1 checkin=${sheetCheckin} vs apartmentery start=${found.start} (bookingId=${bookingId})`);
+    }
+    if (sheetCheckout && found.end && sheetCheckout !== found.end) {
+      Logger.log(`CHECKOUT DRIFT: resId=${resId} room=${room} guest="${guest}" ` +
+        `Sheet1 checkout=${sheetCheckout} vs apartmentery end=${found.end} (bookingId=${bookingId})`);
+      drift.push({ resId: resId, room: room, guest: guest, bookingId: bookingId, sheetCheckout: sheetCheckout, apartmenteryEnd: found.end });
+    }
+  }
+
+  Logger.log(`auditApartmenteryCheckoutDrift_: ${drift.length} checkout-drift case(s) found.`);
+  return drift;
+}
+
+/**
+ * Repair companion to auditApartmenteryCheckoutDrift_(). Re-runs the audit
+ * and, for every checkout-drift case found, pushes Sheet1's checkout date
+ * to apartmentery via the same updateApartmenteryBookingEndDateForRoom
+ * call earlyCheckout_/updateCheckoutDate_ use live — so it goes through
+ * the identical collision-safe path, not a raw write. Run this by hand
+ * from the Apps Script editor after reviewing the audit log; it does not
+ * run on a trigger.
+ */
+function fixApartmenteryCheckoutDrift_() {
+  const drift = auditApartmenteryCheckoutDrift_();
+  if (drift.length === 0) {
+    Logger.log('fixApartmenteryCheckoutDrift_: nothing to fix.');
+    return;
+  }
+  drift.forEach(d => {
+    try {
+      const r = updateApartmenteryBookingEndDateForRoom(d.room, d.bookingId, d.sheetCheckout);
+      if (r && r.skipped) {
+        Logger.log(`fixApartmenteryCheckoutDrift_: SKIPPED resId=${d.resId} — ${r.reason}`);
+      } else {
+        Logger.log(`fixApartmenteryCheckoutDrift_: FIXED resId=${d.resId} room=${d.room} — ` +
+          `apartmentery end ${d.apartmenteryEnd} -> ${d.sheetCheckout}`);
+      }
+    } catch (e) {
+      Logger.log(`fixApartmenteryCheckoutDrift_: FAILED resId=${d.resId} — ${e.message}`);
+    }
+  });
+}
+
 function auditAllApartmenteryBookingIds() {
   Logger.log('auditAllApartmenteryBookingIds: READ-ONLY — pulling calendars for all rooms...');
 
