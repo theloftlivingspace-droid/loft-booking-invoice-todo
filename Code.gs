@@ -86,6 +86,9 @@ function doPost(e) {
     if (action === 'updateCheckin') {
       return jsonResponse_(updateCheckinDate_(body));
     }
+    if (action === 'moveGuestRoom') {
+      return jsonResponse_(moveGuestRoom_(body));
+    }
 
     return jsonResponse_({ ok: false, error: 'Unknown POST action: ' + action });
   } catch (err) {
@@ -708,6 +711,26 @@ function doGet_(e) {
 
   if (action === 'debugScanDocsFolder') {
     return jsonResponse_(debugScanDocsFolder_());
+  }
+
+  if (action === 'discoverDeleteAction') {
+    return jsonResponse_(discoverDeleteActionByResId_(e.parameter.resId || ''));
+  }
+
+  if (action === 'findTestBookingCandidates') {
+    return jsonResponse_(findTestBookingCandidates_(e.parameter.limit));
+  }
+
+  if (action === 'inspectDeleteRequest') {
+    return jsonResponse_(inspectDeleteRequestByResId_(e.parameter.resId || ''));
+  }
+
+  if (action === 'runAutoCreateApartmenteryBookingsNow') {
+    // Same function the hourly trigger calls — this just runs it early
+    // instead of waiting, for ALL currently-eligible rows (not only one
+    // resId). No new behavior invented; just an on-demand invocation of
+    // existing production automation.
+    return jsonResponse_(autoCreateApartmenteryBookings());
   }
 
   if (action === 'debugMigrateStrayFiles') {
