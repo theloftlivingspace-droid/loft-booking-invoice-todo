@@ -762,6 +762,38 @@ function doGet_(e) {
     return jsonResponse_(Object.assign({ ok: true }, auditApartmenteryCheckoutDrift_(limit)));
   }
 
+  // Manually re-triggers syncApartmenteryCheckoutDate_ for ONE resId using
+  // Sheet1's current checkin/checkout — for cases where Sheet1 is already
+  // correct but the push to apartmentery never landed (e.g. it kept
+  // failing on a phantom-day collision before the dodge fix existed) and
+  // there's nothing left to "change" to re-trigger updateCheckoutDate_'s
+  // normal save-in-the-UI path (it no-ops when newCheckout === current
+  // Sheet1 value). ?resId=... required. Goes through the same
+  // collision-safe / phantom-dodge path as every other checkout push.
+  if (action === 'forceResyncApartmenteryCheckout') {
+    const resId = String(e.parameter.resId || '').trim();
+    if (!resId) return jsonResponse_({ ok: false, error: 'Missing resId' });
+    const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+    const src = ss.getSheetByName('Sheet1');
+    const data = src.getDataRange().getValues();
+    const header = data[0];
+    const idx = indexMap_(header, ['ResId', 'เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์']);
+    let rowFound = null;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][idx.ResId] || '').trim() === resId) {
+        rowFound = data[i];
+        break;
+      }
+    }
+    if (!rowFound) return jsonResponse_({ ok: false, error: `resId ${resId} not found in Sheet1` });
+    const room = String(rowFound[idx['เลขห้อง']] || '').trim();
+    const guest = String(rowFound[idx['ชื่อแขก']] || '').trim();
+    const checkin = formatCellDate_(rowFound[idx['เช็คอิน']]);
+    const checkout = formatCellDate_(rowFound[idx['เช็คเอาท์']]);
+    const syncResult = syncApartmenteryCheckoutDate_(resId, room, guest, checkin, checkout);
+    return jsonResponse_(Object.assign({ ok: true, resId, room, guest, checkin, checkout }, syncResult));
+  }
+
   // Writes to Apartmentery (via the same collision-safe
   // updateApartmenteryBookingEndDateForRoom the live pencil-edit path
   // uses) — call auditApartmenteryCheckoutDrift first to see what this
