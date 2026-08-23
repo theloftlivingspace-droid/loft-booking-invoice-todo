@@ -794,6 +794,44 @@ function doGet_(e) {
     return jsonResponse_(Object.assign({ ok: true, resId, room, guest, checkin, checkout }, syncResult));
   }
 
+  // Diagnostic: shows exactly which Sheet1 rows are being treated as
+  // "phantom" cancelled-before-arrival days for a room — i.e. the full
+  // resId/guest/date behind each entry _getCancelledPhantomDatesForRoom_
+  // would return, not just the bare date. Built after
+  // forceResyncApartmenteryCheckout dodged Hasan Workman's extension all
+  // the way to 15 Aug instead of the expected 23 Aug (only Jerry
+  // Ritschard's 24 Aug phantom was known about) — need to see what's
+  // actually sitting at the earlier date before deciding what to do
+  // about it. ?room=203 (bare room number or the full "203 Allure" label
+  // both work, matched via roomNum_).
+  if (action === 'listCancelledPhantomRowsForRoom') {
+    const targetRoom = roomNum_(String(e.parameter.room || '').trim());
+    if (!targetRoom) return jsonResponse_({ ok: false, error: 'Missing or unparseable ?room=' });
+    const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+    const src = ss.getSheetByName('Sheet1');
+    const data = src.getDataRange().getValues();
+    const header = data[0];
+    const idx = indexMap_(header, ['ResId', 'เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์', APARTMENTERY_BOOKING_ID_COL_HEADER]);
+    const rows = [];
+    for (let i = 1; i < data.length; i++) {
+      const room = String(data[i][idx['เลขห้อง']] || '').trim();
+      if (!/ยกเลิก|cancel/i.test(room)) continue;
+      if (roomNum_(room) !== targetRoom) continue;
+      const ci = idx['เช็คอิน'] >= 0 ? formatCellDate_(data[i][idx['เช็คอิน']]) : '';
+      const co = idx['เช็คเอาท์'] >= 0 ? formatCellDate_(data[i][idx['เช็คเอาท์']]) : '';
+      rows.push({
+        resId: String(data[i][idx.ResId] || '').trim(),
+        guest: idx['ชื่อแขก'] >= 0 ? String(data[i][idx['ชื่อแขก']] || '').trim() : '',
+        room: room,
+        checkin: ci,
+        checkout: co,
+        isPhantom: !!(ci && co && ci === co), // this is the only shape _getCancelledPhantomDatesForRoom_/the dodge helper actually treats as blocking
+        bookingId: idx[APARTMENTERY_BOOKING_ID_COL_HEADER] >= 0 ? String(data[i][idx[APARTMENTERY_BOOKING_ID_COL_HEADER]] || '').trim() : ''
+      });
+    }
+    return jsonResponse_({ ok: true, room: targetRoom, cancelledRows: rows });
+  }
+
   // Writes to Apartmentery (via the same collision-safe
   // updateApartmenteryBookingEndDateForRoom the live pencil-edit path
   // uses) — call auditApartmenteryCheckoutDrift first to see what this
