@@ -803,6 +803,22 @@ function doGet_(e) {
     return jsonResponse_(debugFetchInvoiceListHtml_(unit.branchId, unit.unitId, bookingId));
   }
 
+  // Read-only live scan against Apartmentery — same reasoning as
+  // backfillApartmenteryInvoiceIds above about mobile connection timeouts,
+  // but this one pulls one calendar page per ROOM (not per invoice), so
+  // it's already small/fast enough (11 rooms) to not need a limit param.
+  if (action === 'auditApartmenteryCheckoutDrift') {
+    return jsonResponse_({ ok: true, drift: auditApartmenteryCheckoutDrift_() });
+  }
+
+  // Writes to Apartmentery (via the same collision-safe
+  // updateApartmenteryBookingEndDateForRoom the live pencil-edit path
+  // uses) — call auditApartmenteryCheckoutDrift first to see what this
+  // would change before triggering it.
+  if (action === 'fixApartmenteryCheckoutDrift') {
+    return jsonResponse_({ ok: true, results: fixApartmenteryCheckoutDrift_() });
+  }
+
   // Read-only diagnostic — same resolution logic as backfillApartmenteryInvoiceIds
   // but never writes anything, reports a specific reason per stuck invoiceKey.
   if (action === 'reportStuckApartmenteryInvoices') {
