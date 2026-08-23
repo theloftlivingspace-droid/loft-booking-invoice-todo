@@ -1620,21 +1620,26 @@ function fixApartmenteryCheckoutDrift_() {
   const drift = auditApartmenteryCheckoutDrift_();
   if (drift.length === 0) {
     Logger.log('fixApartmenteryCheckoutDrift_: nothing to fix.');
-    return;
+    return [];
   }
+  const results = [];
   drift.forEach(d => {
     try {
       const r = updateApartmenteryBookingEndDateForRoom(d.room, d.bookingId, d.sheetCheckout);
       if (r && r.skipped) {
         Logger.log(`fixApartmenteryCheckoutDrift_: SKIPPED resId=${d.resId} — ${r.reason}`);
+        results.push({ resId: d.resId, room: d.room, guest: d.guest, status: 'skipped', reason: r.reason });
       } else {
         Logger.log(`fixApartmenteryCheckoutDrift_: FIXED resId=${d.resId} room=${d.room} — ` +
           `apartmentery end ${d.apartmenteryEnd} -> ${d.sheetCheckout}`);
+        results.push({ resId: d.resId, room: d.room, guest: d.guest, status: 'fixed', from: d.apartmenteryEnd, to: d.sheetCheckout });
       }
     } catch (e) {
       Logger.log(`fixApartmenteryCheckoutDrift_: FAILED resId=${d.resId} — ${e.message}`);
+      results.push({ resId: d.resId, room: d.room, guest: d.guest, status: 'failed', error: String(e.message || e) });
     }
   });
+  return results;
 }
 
 function auditAllApartmenteryBookingIds() {
