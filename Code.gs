@@ -634,6 +634,14 @@ function doGet_(e) {
     return jsonResponse_(inspectDeleteRequestByResId_(e.parameter.resId || ''));
   }
 
+  if (action === 'runAutoCreateApartmenteryBookingsNow') {
+    // Same function the hourly trigger calls — this just runs it early
+    // instead of waiting, for ALL currently-eligible rows (not only one
+    // resId). No new behavior invented; just an on-demand invocation of
+    // existing production automation.
+    return jsonResponse_(autoCreateApartmenteryBookings());
+  }
+
   if (action === 'debugMigrateStrayFiles') {
     return jsonResponse_(migrateStrayRootFiles_());
   }
