@@ -1694,11 +1694,26 @@ function cancelBooking_(resId) {
       var guest     = String(data[i][idx['ชื่อแขก']] || '').trim();
       var checkin   = idx['เช็คอิน']  >= 0 ? String(data[i][idx['เช็คอิน']]  || '').trim() : '';
       var checkinYMD = formatCellDate_(checkin) || checkin;
+      var checkoutRaw = idx['เช็คเอาท์'] >= 0 ? data[i][idx['เช็คเอาท์']] : '';
+      var checkoutYMD = formatCellDate_(checkoutRaw) || String(checkoutRaw || '').trim();
 
       // ยังไม่ถึงวันเช็คอิน (ยกเลิกล่วงหน้า) → เช็คเอาท์ = วันเช็คอิน (เหลือ 0 คืน)
-      // เลยวันเช็คอินไปแล้ว (เข้าพักอยู่แล้วถูกยกเลิก) → เช็คเอาท์ = วันที่ยกเลิกจริง (วันนี้)
-      var notYetArrived = !!(checkinYMD && checkinYMD > todayBKK);
-      var newCheckoutYMD = notYetArrived ? checkinYMD : todayBKK;
+      // เลยวันเช็คเอาท์เดิมไปแล้ว (แขกออกไปแล้วจริง ไม่ว่าจะตรงกำหนดหรือเช็คเอาท์
+      // ก่อนแล้วผ่าน earlyCheckout_) → ไม่แตะวันเช็คเอาท์เลย เก็บวันที่อยู่จริงไว้
+      // (เดิมโค้ดตรงนี้จะเขียนทับเป็นวันนี้เสมอทุกกรณีที่เลยวันเช็คอินไปแล้ว ทำให้
+      // ปฏิทินโชว์วันที่ผิดถ้ากดยกเลิกหลังจากแขกเช็คเอาท์ไปแล้วจริง — แก้ 2026-08-25)
+      // ระหว่างเข้าพักอยู่จริง (เช็คอินแล้ว ยังไม่ถึงวันเช็คเอาท์เดิม) → เช็คเอาท์ =
+      // วันนี้ (ยกเลิกกลางคัน ต้องปล่อยห้องตั้งแต่วันนี้)
+      var notYetArrived   = !!(checkinYMD && checkinYMD > todayBKK);
+      var alreadyDeparted = !notYetArrived && !!(checkoutYMD && checkoutYMD <= todayBKK);
+      var newCheckoutYMD;
+      if (notYetArrived) {
+        newCheckoutYMD = checkinYMD;
+      } else if (alreadyDeparted) {
+        newCheckoutYMD = checkoutYMD;
+      } else {
+        newCheckoutYMD = todayBKK;
+      }
 
       src.getRange(i + 1, idx['เลขห้อง'] + 1).setValue(newRoom);
       if (idx['เช็คเอาท์'] >= 0) {
