@@ -83,12 +83,6 @@ function doPost(e) {
     if (action === 'updateCheckout') {
       return jsonResponse_(updateCheckoutDate_(body));
     }
-    if (action === 'updateCheckin') {
-      return jsonResponse_(updateCheckinDate_(body));
-    }
-    if (action === 'moveGuestRoom') {
-      return jsonResponse_(moveGuestRoom_(body));
-    }
 
     return jsonResponse_({ ok: false, error: 'Unknown POST action: ' + action });
   } catch (err) {
@@ -292,11 +286,47 @@ function syncApartmenteryCheckoutDate_(resId, room, guest, checkin, newCheckout)
       }
     }
     if (aptId) {
-      const r = updateApartmenteryBookingEndDateForRoom(room, aptId, newCheckout);
+      // Extending an existing booking can run into the same phantom-day
+      // collision as creating a new one — a room's own earlier cancelled-
+      // before-arrival booking still occupies a single day on apartmentery's
+      // calendar (see _buildCancelledPhantomDatesByRoom_/
+      // _dodgeApartmenteryPhantomDates_ in ApartmenteryAutomation.gs). That
+      // path was only wired into new-booking creation, not into extending
+      // an existing checkout — found 2026-08-23: room 203 / Hasan Workman
+      // couldn't push several successive extension requests past 21 Aug
+      // because Jerry Ritschard's cancelled-before-arrival booking sat at
+      // 24 Aug in the same room, and every push silently failed at
+      // "this booking collides with another" with nothing surfacing past
+      // the generic apartmenteryNote toast.
+      var targetCheckout = newCheckout;
+      var dodgeNote = '';
+      try {
+        var phantoms = _getCancelledPhantomDatesForRoom_(roomNum_(room));
+        if (phantoms.size > 0) {
+          var dodged = _dodgeApartmenteryPhantomDates_(
+            roomNum_(room), checkin, newCheckout,
+            (function () { var m = {}; m[roomNum_(room)] = phantoms; return m; })()
+          );
+          // Only the endDate-truncate branch is meaningful here — startDate
+          // is never re-sent by updateApartmenteryBookingEndDate (it always
+          // resubmits the booking's existing stored startDate untouched),
+          // so a startDate-dodge from the helper would be silently ignored
+          // anyway; only act on it if it actually changed the endDate.
+          if (dodged.endDate !== newCheckout) {
+            targetCheckout = dodged.endDate;
+            dodgeNote = dodged.note;
+          }
+        }
+      } catch (e) {
+        Logger.log(`syncApartmenteryCheckoutDate_: phantom-dodge check failed for room ${room}, proceeding without it — ${e.message}`);
+      }
+
+      const r = updateApartmenteryBookingEndDateForRoom(room, aptId, targetCheckout);
       if (r && r.skipped) {
         result.apartmenteryNote = r.reason;
       } else {
         result.apartmenterySynced = true;
+        if (dodgeNote) result.apartmenteryNote = dodgeNote;
       }
     } else {
       result.apartmenteryNote = 'no apartmentery bookingId yet — nothing to sync';
@@ -309,6 +339,47 @@ function syncApartmenteryCheckoutDate_(resId, room, guest, checkin, newCheckout)
     }
   }
   return result;
+}
+
+/**
+ * Cancelled-before-arrival dates (checkin===checkout) for ONE room, read
+ * straight from Sheet1 — the single-room equivalent of
+ * _buildCancelledPhantomDatesByRoom_ in ApartmenteryAutomation.gs, used
+ * here because syncApartmenteryCheckoutDate_ only ever needs one room's
+ * phantom set, not a full-sheet map built for every room at once.
+ */
+function _getCancelledPhantomDatesForRoom_(targetRoomNum) {
+  const set = new Set();
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const src = ss.getSheetByName('Sheet1');
+  const data = src.getDataRange().getValues();
+  const header = data[0];
+  const idx = indexMap_(header, ['เลขห้อง', 'เช็คอิน', 'เช็คเอาท์', APARTMENTERY_BOOKING_ID_COL_HEADER]);
+  if (idx['เลขห้อง'] < 0) return set;
+  for (let i = 1; i < data.length; i++) {
+    const room = String(data[i][idx['เลขห้อง']] || '').trim();
+    if (!/ยกเลิก|cancel/i.test(room)) continue;
+    if (roomNum_(room) !== targetRoomNum) continue;
+    // A cancelled row only actually occupies a day on apartmentery's
+    // calendar if an apartmentery booking was ever created for it in the
+    // first place (has a bookingId). Found 2026-08-23: Marouane Boumaiz's
+    // cancelled-before-arrival row (203, 16 Aug) has an EMPTY bookingId —
+    // it was cancelled in Sheet1 before autoCreateApartmenteryBookings
+    // ever ran for it, so there was never anything on apartmentery's
+    // calendar to collide with. The dodge logic doesn't know that and
+    // was treating it as a real blocker anyway, truncating Hasan
+    // Workman's extension all the way down to 15 Aug instead of the
+    // correct 23 Aug (only Jerry Ritschard's 24 Aug — bookingId 329281,
+    // a real apartmentery booking that got cancelled after creation —
+    // actually blocks anything).
+    const bookingId = idx[APARTMENTERY_BOOKING_ID_COL_HEADER] >= 0
+      ? String(data[i][idx[APARTMENTERY_BOOKING_ID_COL_HEADER]] || '').trim() : '';
+    if (!bookingId) continue;
+    const ci = idx['เช็คอิน'] >= 0 ? formatCellDate_(data[i][idx['เช็คอิน']]) : '';
+    const co = idx['เช็คเอาท์'] >= 0 ? formatCellDate_(data[i][idx['เช็คเอาท์']]) : '';
+    if (ci && co && ci === co) set.add(ci);
+  }
+  return set;
 }
 
 function earlyCheckout_(body) {
@@ -509,94 +580,6 @@ function updateCheckoutDate_(body) {
   }, syncResult);
 }
 
-/**
- * Edit the check-in date of a booking that hasn't checked in yet.
- * Mirrors updateCheckoutDate_ above but:
- *  - writes the 'เช็คอิน' column instead of 'เช็คเอาท์'
- *  - conflict check runs the opposite direction (pulling check-in EARLIER
- *    can collide with another booking's checkout in that room)
- *  - blocks the edit outright if CheckStatus already shows this resId as
- *    checked in (frontend already hides the button once checked in, but
- *    this is the server-side guard in case the API is called directly)
- *  - does NOT sync to Apartmentery — only updateApartmenteryBookingEndDate
- *    exists in ApartmenteryClient.gs; there's no reverse-engineered form
- *    field for changing a booking's start date yet. Sheet1 updates
- *    immediately; Apartmentery has to be corrected there by hand until
- *    that sync function gets built (same pattern as apartmenteryNote below).
- */
-function updateCheckinDate_(body) {
-  const resId = String(body.resId || '').trim();
-  const newCheckin = String(body.newCheckin || '').trim();
-  if (!resId) return { ok: false, error: 'resId required' };
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(newCheckin)) return { ok: false, error: 'newCheckin must be YYYY-MM-DD' };
-
-  const statusMap = getCheckStatusMap_();
-  if (statusMap[resId] && statusMap[resId].checkedInAt) {
-    return { ok: false, error: 'already checked in — cannot edit check-in date' };
-  }
-
-  const ss  = SpreadsheetApp.openById(SOURCE_SHEET_ID);
-  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
-  if (!src) return { ok: false, error: 'Sheet1 not found' };
-
-  const data   = src.getDataRange().getValues();
-  const header = data[0];
-  const idx    = indexMap_(header, ['ResId', 'เลขห้อง', 'เช็คเอาท์', 'ชื่อแขก', 'เช็คอิน']);
-  if (idx.ResId < 0 || idx['เช็คอิน'] < 0) return { ok: false, error: 'required columns not found' };
-
-  var rowIdx = -1, room = '', guest = '', oldCheckin = '', checkout = '';
-  for (var i = 1; i < data.length; i++) {
-    if (String(data[i][idx.ResId] || '').trim() === resId) {
-      rowIdx = i;
-      room = String(data[i][idx['เลขห้อง']] || '').trim();
-      guest = idx['ชื่อแขก'] >= 0 ? String(data[i][idx['ชื่อแขก']] || '').trim() : '';
-      oldCheckin = formatCellDate_(data[i][idx['เช็คอิน']]);
-      checkout = idx['เช็คเอาท์'] >= 0 ? formatCellDate_(data[i][idx['เช็คเอาท์']]) : '';
-      break;
-    }
-  }
-  if (rowIdx === -1) return { ok: false, error: 'resId not found: ' + resId };
-  if (/ยกเลิก|cancel/i.test(room)) return { ok: false, error: 'booking is cancelled' };
-  if (newCheckin === oldCheckin) return { ok: false, error: 'newCheckin is the same as current check-in' };
-  if (checkout && newCheckin >= checkout) return { ok: false, error: 'newCheckin must be before checkout' };
-
-  // Conflict check — only matters when pulling check-in earlier: another
-  // booking on the same room could already end somewhere inside
-  // (newCheckin, oldCheckin].
-  if (newCheckin < oldCheckin) {
-    const rn = roomNum_(room);
-    for (var j = 1; j < data.length; j++) {
-      if (j === rowIdx) continue;
-      const otherRoom = String(data[j][idx['เลขห้อง']] || '').trim();
-      if (/ยกเลิก|cancel/i.test(otherRoom)) continue;
-      if (roomNum_(otherRoom) !== rn) continue;
-      const otherCheckout = idx['เช็คเอาท์'] >= 0 ? formatCellDate_(data[j][idx['เช็คเอาท์']]) : '';
-      if (!otherCheckout) continue;
-      if (otherCheckout > newCheckin && otherCheckout <= oldCheckin) {
-        return {
-          ok: false,
-          error: 'conflict',
-          conflict: {
-            resId: String(data[j][idx.ResId] || '').trim(),
-            guest: idx['ชื่อแขก'] >= 0 ? String(data[j][idx['ชื่อแขก']] || '').trim() : '',
-            checkout: otherCheckout,
-          }
-        };
-      }
-    }
-  }
-
-  src.getRange(rowIdx + 1, idx['เช็คอิน'] + 1).setValue(newCheckin);
-  triggerStyleSheet1_();
-
-  return {
-    ok: true, resId: resId, room: room, guest: guest, checkout: checkout,
-    oldCheckin: oldCheckin, newCheckin: newCheckin,
-    apartmenterySynced: false,
-    apartmenteryNote: 'ยังไม่รองรับ sync วันเช็คอินไป Apartmentery อัตโนมัติ (มีแต่ sync วันเช็คเอาท์) — ต้องไปแก้เองใน Apartmentery',
-  };
-}
-
 function getCheckStatusMap_() {
   const sheet = getOrCreateStatusSheet_();
   const data = sheet.getDataRange().getValues();
@@ -713,26 +696,6 @@ function doGet_(e) {
     return jsonResponse_(debugScanDocsFolder_());
   }
 
-  if (action === 'discoverDeleteAction') {
-    return jsonResponse_(discoverDeleteActionByResId_(e.parameter.resId || ''));
-  }
-
-  if (action === 'findTestBookingCandidates') {
-    return jsonResponse_(findTestBookingCandidates_(e.parameter.limit));
-  }
-
-  if (action === 'inspectDeleteRequest') {
-    return jsonResponse_(inspectDeleteRequestByResId_(e.parameter.resId || ''));
-  }
-
-  if (action === 'runAutoCreateApartmenteryBookingsNow') {
-    // Same function the hourly trigger calls — this just runs it early
-    // instead of waiting, for ALL currently-eligible rows (not only one
-    // resId). No new behavior invented; just an on-demand invocation of
-    // existing production automation.
-    return jsonResponse_(autoCreateApartmenteryBookings());
-  }
-
   if (action === 'debugMigrateStrayFiles') {
     return jsonResponse_(migrateStrayRootFiles_());
   }
@@ -801,6 +764,96 @@ function doGet_(e) {
     const unit = getApartmenteryUnitForRoom(room);
     if (!unit) return jsonResponse_({ error: 'unknown room: ' + room });
     return jsonResponse_(debugFetchInvoiceListHtml_(unit.branchId, unit.unitId, bookingId));
+  }
+
+  // Read-only against Apartmentery — one fetch per unique bookingId
+  // (the booking's actual edit form, not the calendar view — see
+  // auditApartmenteryCheckoutDrift_'s comment for why that distinction
+  // matters). Same mobile-timeout batching as backfillApartmenteryInvoiceIds:
+  // pass ?limit= to override the default, call again using the returned
+  // "remaining" count to know when you're done.
+  if (action === 'auditApartmenteryCheckoutDrift') {
+    const limit = e.parameter.limit ? parseInt(e.parameter.limit, 10) : 40;
+    return jsonResponse_(Object.assign({ ok: true }, auditApartmenteryCheckoutDrift_(limit)));
+  }
+
+  // Manually re-triggers syncApartmenteryCheckoutDate_ for ONE resId using
+  // Sheet1's current checkin/checkout — for cases where Sheet1 is already
+  // correct but the push to apartmentery never landed (e.g. it kept
+  // failing on a phantom-day collision before the dodge fix existed) and
+  // there's nothing left to "change" to re-trigger updateCheckoutDate_'s
+  // normal save-in-the-UI path (it no-ops when newCheckout === current
+  // Sheet1 value). ?resId=... required. Goes through the same
+  // collision-safe / phantom-dodge path as every other checkout push.
+  if (action === 'forceResyncApartmenteryCheckout') {
+    const resId = String(e.parameter.resId || '').trim();
+    if (!resId) return jsonResponse_({ ok: false, error: 'Missing resId' });
+    const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+    const src = ss.getSheetByName('Sheet1');
+    const data = src.getDataRange().getValues();
+    const header = data[0];
+    const idx = indexMap_(header, ['ResId', 'เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์']);
+    let rowFound = null;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][idx.ResId] || '').trim() === resId) {
+        rowFound = data[i];
+        break;
+      }
+    }
+    if (!rowFound) return jsonResponse_({ ok: false, error: `resId ${resId} not found in Sheet1` });
+    const room = String(rowFound[idx['เลขห้อง']] || '').trim();
+    const guest = String(rowFound[idx['ชื่อแขก']] || '').trim();
+    const checkin = formatCellDate_(rowFound[idx['เช็คอิน']]);
+    const checkout = formatCellDate_(rowFound[idx['เช็คเอาท์']]);
+    const syncResult = syncApartmenteryCheckoutDate_(resId, room, guest, checkin, checkout);
+    return jsonResponse_(Object.assign({ ok: true, resId, room, guest, checkin, checkout }, syncResult));
+  }
+
+  // Diagnostic: shows exactly which Sheet1 rows are being treated as
+  // "phantom" cancelled-before-arrival days for a room — i.e. the full
+  // resId/guest/date behind each entry _getCancelledPhantomDatesForRoom_
+  // would return, not just the bare date. Built after
+  // forceResyncApartmenteryCheckout dodged Hasan Workman's extension all
+  // the way to 15 Aug instead of the expected 23 Aug (only Jerry
+  // Ritschard's 24 Aug phantom was known about) — need to see what's
+  // actually sitting at the earlier date before deciding what to do
+  // about it. ?room=203 (bare room number or the full "203 Allure" label
+  // both work, matched via roomNum_).
+  if (action === 'listCancelledPhantomRowsForRoom') {
+    const targetRoom = roomNum_(String(e.parameter.room || '').trim());
+    if (!targetRoom) return jsonResponse_({ ok: false, error: 'Missing or unparseable ?room=' });
+    const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+    const src = ss.getSheetByName('Sheet1');
+    const data = src.getDataRange().getValues();
+    const header = data[0];
+    const idx = indexMap_(header, ['ResId', 'เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์', APARTMENTERY_BOOKING_ID_COL_HEADER]);
+    const rows = [];
+    for (let i = 1; i < data.length; i++) {
+      const room = String(data[i][idx['เลขห้อง']] || '').trim();
+      if (!/ยกเลิก|cancel/i.test(room)) continue;
+      if (roomNum_(room) !== targetRoom) continue;
+      const ci = idx['เช็คอิน'] >= 0 ? formatCellDate_(data[i][idx['เช็คอิน']]) : '';
+      const co = idx['เช็คเอาท์'] >= 0 ? formatCellDate_(data[i][idx['เช็คเอาท์']]) : '';
+      rows.push({
+        resId: String(data[i][idx.ResId] || '').trim(),
+        guest: idx['ชื่อแขก'] >= 0 ? String(data[i][idx['ชื่อแขก']] || '').trim() : '',
+        room: room,
+        checkin: ci,
+        checkout: co,
+        isPhantom: !!(ci && co && ci === co), // this is the only shape _getCancelledPhantomDatesForRoom_/the dodge helper actually treats as blocking
+        bookingId: idx[APARTMENTERY_BOOKING_ID_COL_HEADER] >= 0 ? String(data[i][idx[APARTMENTERY_BOOKING_ID_COL_HEADER]] || '').trim() : ''
+      });
+    }
+    return jsonResponse_({ ok: true, room: targetRoom, cancelledRows: rows });
+  }
+
+  // Writes to Apartmentery (via the same collision-safe
+  // updateApartmenteryBookingEndDateForRoom the live pencil-edit path
+  // uses) — call auditApartmenteryCheckoutDrift first to see what this
+  // would change before triggering it. Same ?limit= batching as above.
+  if (action === 'fixApartmenteryCheckoutDrift') {
+    const limit = e.parameter.limit ? parseInt(e.parameter.limit, 10) : 40;
+    return jsonResponse_(Object.assign({ ok: true }, fixApartmenteryCheckoutDrift_(limit)));
   }
 
   // Read-only diagnostic — same resolution logic as backfillApartmenteryInvoiceIds

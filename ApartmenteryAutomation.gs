@@ -106,6 +106,14 @@ function _buildCancelledPhantomDatesByRoom_(items) {
   items.forEach(function (x) {
     if (!/ยกเลิก|cancel/i.test(x.room)) return;
     if (!x.checkin || !x.checkout || x.checkin !== x.checkout) return; // mid-stay cancel — real occupancy, skip
+    // Only counts as a real apartmentery-side blocker if a booking was
+    // actually created there in the first place. Found 2026-08-23:
+    // Marouane Boumaiz's cancelled row (203, 16 Aug) has an empty
+    // apartmenteryBookingId — cancelled before autoCreateApartmenteryBookings
+    // ever ran for it, so nothing was ever on apartmentery's calendar to
+    // collide with. Without this check the dodge logic treated it as a
+    // blocker anyway and over-truncated a real booking's range needlessly.
+    if (!x.apartmenteryBookingId) return;
     const rn = roomNum_(x.room);
     if (!rn) return;
     if (!byRoom[rn]) byRoom[rn] = new Set();
@@ -1513,6 +1521,153 @@ function findCandidatesForUnresolved20260716() {
       candidates.forEach(c => Logger.log(`  candidate: id=${c.id} start=${c.start} title="${c.title}"`));
     }
   });
+}
+
+/**
+ * READ-ONLY. Finds active (non-cancelled) Sheet1 bookings whose checkout
+ * date no longer matches what's actually on apartmentery's calendar for
+ * their stored bookingId — the "guest extended their stay and Sheet1 got
+ * updated, but nothing pushed the new date to apartmentery" gap. Found
+ * 2026-08-23: room 203 / Hasan Workman extended 21→26 Aug, the-loft-admin
+ * showed 26 Aug correctly, apartmentery still showed 21 Aug — whatever
+ * updated Sheet1 that time never called syncApartmenteryCheckoutDate_ /
+ * updateCheckoutDate_, so the push to apartmentery never happened.
+ *
+ * checkin drift is logged too but NOT auto-fixed by the companion below —
+ * a changed checkin usually means a room/date swap, which needs a human
+ * to confirm it isn't a genuine double-booking before anything touches
+ * apartmentery. Checkout drift is safe to auto-fix the same way
+ * earlyCheckout_/updateCheckoutDate_ already do it live.
+ *
+ * Repair companion: fixApartmenteryCheckoutDrift_().
+ */
+function auditApartmenteryCheckoutDrift_(limit) {
+  const maxLookups = limit || 40;
+  Logger.log('auditApartmenteryCheckoutDrift_: READ-ONLY — building candidate list from Sheet1...');
+
+  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const src = ss.getSheetByName('Sheet1');
+  const data = src.getDataRange().getValues();
+  const header = data[0];
+  const idx = indexMap_(header, ['ResId', 'เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์', APARTMENTERY_BOOKING_ID_COL_HEADER]);
+  if (idx.ResId < 0 || idx[APARTMENTERY_BOOKING_ID_COL_HEADER] < 0) {
+    Logger.log('auditApartmenteryCheckoutDrift_: required columns not found — aborting.');
+    return [];
+  }
+
+  // Group Sheet1 rows by bookingId (not by resId) — an extended stay can
+  // leave several resId rows pointing at the SAME apartmentery bookingId
+  // (e.g. each OTA modification/re-confirmation gets its own resId while
+  // the guest never left). Apartmentery only has one endDate for that
+  // bookingId, so the right thing to compare against is the LATEST
+  // checkout among the group, not each row individually — otherwise
+  // superseded earlier rows show up as permanent phantom "drift" forever.
+  const byBookingId = {}; // bookingId -> { room, rows: [{resId, guest, checkin, checkout}] }
+  for (let i = 1; i < data.length; i++) {
+    const room = String(data[i][idx['เลขห้อง']] || '').trim();
+    if (/ยกเลิก|cancel/i.test(room)) continue; // cancelled — handled separately, not a drift case
+    const resId = String(data[i][idx.ResId] || '').trim();
+    const bookingId = String(data[i][idx[APARTMENTERY_BOOKING_ID_COL_HEADER]] || '').trim();
+    if (!resId || !bookingId) continue;
+    const checkin = idx['เช็คอิน'] >= 0 ? formatCellDate_(data[i][idx['เช็คอิน']]) : '';
+    const checkout = idx['เช็คเอาท์'] >= 0 ? formatCellDate_(data[i][idx['เช็คเอาท์']]) : '';
+    const guest = idx['ชื่อแขก'] >= 0 ? String(data[i][idx['ชื่อแขก']] || '').trim() : '';
+    if (!byBookingId[bookingId]) byBookingId[bookingId] = { room: room, rows: [] };
+    byBookingId[bookingId].rows.push({ resId: resId, guest: guest, checkin: checkin, checkout: checkout });
+  }
+
+  const bookingIds = Object.keys(byBookingId);
+  Logger.log(`auditApartmenteryCheckoutDrift_: ${bookingIds.length} unique bookingId(s) across active rows, checking up to ${maxLookups} this run.`);
+
+  // Fetch each bookingId's REAL stored dates from its edit form — NOT the
+  // rendered public calendar's `end:` field. FullCalendar treats all-day
+  // event ranges as end-EXCLUSIVE, so apartmentery renders that field as
+  // checkout+1 for display purposes only; comparing it directly against
+  // Sheet1's checkout produced a false "+1 day drift" on almost every
+  // active booking (confirmed 2026-08-23 against the Hasan Workman
+  // booking-list table, which showed the true stored checkout of 21 Aug —
+  // the calendar's `end:` field for that same booking read 22 Aug).
+  // _getApartmenteryBookingEditFormState_ reads the actual <input
+  // name="endDate"> value from the booking's edit page instead, matching
+  // exactly what the booking-list table (and updateApartmenteryBookingEndDate
+  // itself, which resubmits this same state) shows as ground truth.
+  const drift = [];
+  let checked = 0;
+  for (let b = 0; b < bookingIds.length && checked < maxLookups; b++) {
+    const bookingId = bookingIds[b];
+    const group = byBookingId[bookingId];
+    const unit = getApartmenteryUnitForRoom(group.room);
+    if (!unit) continue;
+
+    let state;
+    try {
+      state = _getApartmenteryBookingEditFormState_(unit.branchId, unit.unitId, bookingId);
+      checked++;
+    } catch (e) {
+      Logger.log(`auditApartmenteryCheckoutDrift_: FAILED to load bookingId=${bookingId} room=${group.room}: ${e.message}`);
+      continue;
+    }
+
+    // Ground truth = the latest checkout among all Sheet1 rows sharing
+    // this bookingId (the current, non-superseded state of the stay).
+    let latest = group.rows[0];
+    group.rows.forEach(r => { if (r.checkout > latest.checkout) latest = r; });
+
+    if (latest.checkin && state.startDate && latest.checkin !== state.startDate) {
+      Logger.log(`CHECKIN DRIFT (not auto-fixed — needs human review): resId=${latest.resId} room=${group.room} guest="${latest.guest}" ` +
+        `Sheet1 checkin=${latest.checkin} vs apartmentery startDate=${state.startDate} (bookingId=${bookingId})`);
+    }
+    if (latest.checkout && state.endDate && latest.checkout !== state.endDate) {
+      Logger.log(`CHECKOUT DRIFT: resId=${latest.resId} room=${group.room} guest="${latest.guest}" ` +
+        `Sheet1 checkout=${latest.checkout} vs apartmentery endDate=${state.endDate} (bookingId=${bookingId})`);
+      drift.push({
+        resId: latest.resId, room: group.room, guest: latest.guest, bookingId: bookingId,
+        sheetCheckout: latest.checkout, apartmenteryEnd: state.endDate
+      });
+    }
+  }
+
+  const remaining = bookingIds.length - checked;
+  Logger.log(`auditApartmenteryCheckoutDrift_: checked ${checked}/${bookingIds.length} bookingIds, ` +
+    `${drift.length} real checkout-drift case(s) found. ${remaining} still unchecked this run.`);
+  return { items: drift, checked: checked, totalCandidates: bookingIds.length, remaining: remaining };
+}
+
+/**
+ * Repair companion to auditApartmenteryCheckoutDrift_(). Re-runs the audit
+ * and, for every checkout-drift case found, pushes Sheet1's checkout date
+ * to apartmentery via the same updateApartmenteryBookingEndDateForRoom
+ * call earlyCheckout_/updateCheckoutDate_ use live — so it goes through
+ * the identical collision-safe path, not a raw write. Run this by hand
+ * from the Apps Script editor (or the mobile URL action) after reviewing
+ * the audit log; it does not run on a trigger.
+ */
+function fixApartmenteryCheckoutDrift_(limit) {
+  const audit = auditApartmenteryCheckoutDrift_(limit);
+  const drift = audit.items;
+  if (drift.length === 0) {
+    Logger.log('fixApartmenteryCheckoutDrift_: nothing to fix in this batch.');
+    return { fixed: [], checked: audit.checked, remaining: audit.remaining };
+  }
+  const results = [];
+  drift.forEach(d => {
+
+    try {
+      const r = updateApartmenteryBookingEndDateForRoom(d.room, d.bookingId, d.sheetCheckout);
+      if (r && r.skipped) {
+        Logger.log(`fixApartmenteryCheckoutDrift_: SKIPPED resId=${d.resId} — ${r.reason}`);
+        results.push({ resId: d.resId, room: d.room, guest: d.guest, status: 'skipped', reason: r.reason });
+      } else {
+        Logger.log(`fixApartmenteryCheckoutDrift_: FIXED resId=${d.resId} room=${d.room} — ` +
+          `apartmentery end ${d.apartmenteryEnd} -> ${d.sheetCheckout}`);
+        results.push({ resId: d.resId, room: d.room, guest: d.guest, status: 'fixed', from: d.apartmenteryEnd, to: d.sheetCheckout });
+      }
+    } catch (e) {
+      Logger.log(`fixApartmenteryCheckoutDrift_: FAILED resId=${d.resId} — ${e.message}`);
+      results.push({ resId: d.resId, room: d.room, guest: d.guest, status: 'failed', error: String(e.message || e) });
+    }
+  });
+  return { fixed: results, checked: audit.checked, remaining: audit.remaining };
 }
 
 function auditAllApartmenteryBookingIds() {
