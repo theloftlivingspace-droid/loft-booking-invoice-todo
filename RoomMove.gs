@@ -105,6 +105,25 @@ const MOVE_TARGET_ROOMS = [
 ];
 
 /**
+ * "205" → "205 Allure", using the type already validated against
+ * MOVE_TARGET_ROOMS. Every other path that writes Sheet1's เลขห้อง
+ * column carries "num Type" (see email-sync.js's getRoomLabel(),
+ * ROOM_TYPE_MAP in styleSheet1_impl_) — this was the one writer that
+ * dropped the type and wrote the bare number instead, even though
+ * MOVE_TARGET_ROOMS already has the type sitting right there. Caught
+ * from Loft_Reservations_Master row 190 (room 205, no "Allure" suffix,
+ * 2026-08-28) — styleSheet1_impl_ still colors the row correctly since
+ * it keys off the first token, but the label itself was inconsistent
+ * with every other row's format.
+ * Falls back to the bare number if somehow not in MOVE_TARGET_ROOMS
+ * (shouldn't happen — moveGuestRoom_ already validated it above).
+ */
+function roomLabel_(num) {
+  const target = MOVE_TARGET_ROOMS.find(r => r.num === num);
+  return target ? `${num} ${target.type}` : num;
+}
+
+/**
  * Entry point — call as moveGuestRoom_(body) from doPost().
  * body: { resId, newRoom, reason, actor, effectiveDate? }
  */
@@ -186,7 +205,7 @@ function moveRoomBeforeCheckin_(src, booking, newRoom, existingAptBookingId) {
     src.deleteRow(booking.rowIndex);
 
     const newRowValues = oldRowValues.slice();
-    newRowValues[booking.idx['เลขห้อง']] = newRoom;
+    newRowValues[booking.idx['เลขห้อง']] = roomLabel_(newRoom);
     // Apartmentery Booking ID column (if present) must be cleared — the old
     // id belonged to the old room and is now orphaned/shrunk; a fresh row
     // must let autoCreateApartmenteryBookings assign a brand-new one for
@@ -294,7 +313,7 @@ function moveRoomAfterCheckin_(src, booking, newRoom, effectiveDate) {
     const oldRowValues = src.getRange(booking.rowIndex, 1, 1, src.getLastColumn()).getValues()[0];
     const segmentBValues = oldRowValues.slice();
     segmentBValues[booking.idx['ResId']] = segmentBResId;
-    segmentBValues[booking.idx['เลขห้อง']] = newRoom;
+    segmentBValues[booking.idx['เลขห้อง']] = roomLabel_(newRoom);
     segmentBValues[booking.idx['เช็คอิน']] = moveDate;
     segmentBValues[booking.idx['เช็คเอาท์']] = booking.checkOut;
     if (booking.idx[APARTMENTERY_BOOKING_ID_COL_HEADER] >= 0) {
