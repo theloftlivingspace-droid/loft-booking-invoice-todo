@@ -454,11 +454,7 @@ function notifyMaidGroupRoomMove_(booking, oldRoom, newRoom, hasInvoice, checkSt
   try {
     const props = PropertiesService.getScriptProperties();
     const botUrl = props.getProperty('BOT_URL') || 'https://hotel-line-bot.onrender.com';
-    const adminTok = props.getProperty('ADMIN_TOKEN');
-    if (!adminTok) {
-      Logger.log('notifyMaidGroupRoomMove_: ADMIN_TOKEN script property not set — skipping LINE notify');
-      return;
-    }
+    const adminTok = props.getProperty('ADMIN_TOKEN') || 'apt2025@secret';
     UrlFetchApp.fetch(botUrl + '/api/room-move-notify', {
       method: 'post',
       contentType: 'application/json',
