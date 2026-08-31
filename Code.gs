@@ -1009,9 +1009,9 @@ function getRevenueLedger_() {
     }
     rowsToKeep.forEach(row => {
       ledger.push({
-        date: String(row[0] || ''), ota: String(row[1] || ''), bookingId: bid,
+        date: formatCellDate_(row[0]), ota: String(row[1] || ''), bookingId: bid,
         guest: String(row[4] || ''), room: String(row[5] || ''),
-        checkin: String(row[6] || ''), checkout: String(row[7] || ''),
+        checkin: formatCellDate_(row[6]), checkout: formatCellDate_(row[7]),
         nights: parseInt(row[8]) || 0,
         gross: parseFloat(String(row[9]).replace(/,/g, '')) || 0,
         commission: parseFloat(String(row[10]).replace(/,/g, '')) || 0,
