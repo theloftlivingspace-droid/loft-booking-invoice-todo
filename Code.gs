@@ -1472,8 +1472,12 @@ function makeMatchKeys_(guest, checkin, room) {
 
 function allNameParts_(raw) {
   raw = String(raw || '').trim();
+  // ก่อนหน้านี้ regex ไม่รองรับอักษร Cyrillic (А-Яа-яЁё) — ชื่อรัสเซีย/ยูเครน
+  // (เช่น "Глеп Бабич") ถูก strip จนเหลือ '' ทุกคำ ทำให้ allNameParts_ คืน []
+  // และ lookupRoomFromIndex_ หา match ไม่เจอเลย → flag เป็น "ไม่ทราบห้อง" เสมอ
+  // แม้ booking จะมีอยู่จริงใน Sheet1 ก็ตาม — bug พบ 2026-09-02 (Глеп Бабич)
   return raw.split(/[\s,\/\\]+/)
-    .map(p => p.toLowerCase().replace(/[^a-z0-9ก-๙\u4e00-\u9fff\u3400-\u4dbf]/g, ''))
+    .map(p => p.toLowerCase().replace(/[^a-z0-9ก-๙\u0400-\u04ff\u4e00-\u9fff\u3400-\u4dbf]/g, ''))
     .filter(p => {
       if (!p) return false;
       const isCjk = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(p);
