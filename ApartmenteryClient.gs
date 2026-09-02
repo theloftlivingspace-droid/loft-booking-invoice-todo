@@ -108,7 +108,11 @@ function _extractPlayErrorMessage_(html) {
   }
 
   // Structure didn't match what we expected — fall back to a bigger raw
-  // slice so there's still something to look at.
+  // slice so there's still something to look at. Called out as genuinely
+  // empty (vs. present-but-unparseable) since an empty body from apartmentery
+  // usually points at something in front of it (proxy/CDN/WAF) rather than
+  // apartmentery's own error page format having changed.
+  if (!html) return 'response body was empty (no HTML at all) — likely not apartmentery\'s own error page (proxy/CDN/WAF in front of it returning a bodiless response), rather than a parse miss';
   return 'no alert/h1/h2 found; raw (first 3000 chars): ' + html.slice(0, 3000);
 }
 
@@ -504,7 +508,14 @@ function createApartmenteryBooking(branchId, unitId, opts) {
     `Booking creation for unit ${unitId} (guest ${opts.guestName}) did not redirect ` +
     `as expected (HTTP ${code}). Response may indicate a validation error — inspect manually.`
   );
-  err.apartmenteryError = extractedError;
+  // Prefix with the HTTP status code — callers building the LINE alert use
+  // `err.apartmenteryError || err.message` and pick this string whenever it's
+  // non-empty, which silently drops the status code (only present in
+  // err.message) even in the uninformative "no alert/h1/h2 found" fallback
+  // case. That's exactly the case where the code matters most: an empty
+  // response body with no code shown is indistinguishable from a real parse
+  // miss vs. e.g. a 502/503 from a proxy/CDN in front of apartmentery.
+  err.apartmenteryError = `HTTP ${code}: ${extractedError}`;
   // "การจองนี้ชนกับการจองอื่น" = this booking collides with an existing one on the
   // same unit/dates — near-always means the booking was already created manually
   // in apartmentery before automation existed, not a real scheduling conflict.
