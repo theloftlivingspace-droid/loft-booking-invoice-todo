@@ -761,6 +761,13 @@ function doGet_(e) {
 
   // One-off diagnostic (2026-07-30) for building amount-based matching on
   // multi-invoice bookings — see debugFetchInvoiceListHtml_ for why.
+  // One-off diagnostic (2026-09-03) for two Apartmentery sync errors —
+  // see DiagnoseSyncErrors20260903.gs for full explanation. Phone-friendly:
+  // returns { ok, log: [...] } instead of writing to Logger.
+  if (action === 'diagnoseSyncErrors20260903') {
+    return jsonResponse_(diagnoseSyncErrors20260903());
+  }
+
   if (action === 'debugInvoiceListHtml') {
     const room = e.parameter.room || '';
     const bookingId = e.parameter.bookingId || '';
