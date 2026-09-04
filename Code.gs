@@ -234,8 +234,15 @@ function getAllDocs_() {
  * ============================================================ */
 const STATUS_SHEET_NAME = 'CheckStatus';
 
-function getOrCreateStatusSheet_() {
-  const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+// Call after any write that changes what getRoomStatus_() returns (check-in,
+// checkout, room move, cancel, ...) so Calendar/Check-in-out see it on their
+// very next load instead of waiting out the cache TTL.
+function invalidateRoomStatusCache_() {
+  try { CacheService.getScriptCache().remove('roomStatus_v1'); } catch (e) { /* best-effort */ }
+}
+
+function getOrCreateStatusSheet_(existingSs) {
+  const ss = existingSs || SpreadsheetApp.openById(SOURCE_SHEET_ID);
   let sheet = ss.getSheetByName(STATUS_SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(STATUS_SHEET_NAME);
@@ -264,6 +271,7 @@ function markCheckedIn_(body) {
   } else {
     sheet.getRange(row, 2).setValue(now);
   }
+  invalidateRoomStatusCache_();
   return { ok: true, resId: resId, checkedInAt: now };
 }
 
@@ -417,6 +425,7 @@ function earlyCheckout_(body) {
     sheet.getRange(row, 5).setValue(newCheckout);
   }
   if (alreadyNotified) {
+    invalidateRoomStatusCache_();
     return { ok: true, resId: resId, checkedOutAt: now, duplicate: true };
   }
 
@@ -493,6 +502,7 @@ function earlyCheckout_(body) {
     Logger.log('earlyCheckout_ Sheet1 update error: ' + e);
   }
 
+  invalidateRoomStatusCache_();
   return Object.assign({
     ok: true, resId: resId, checkedOutAt: now, newCheckout: newCheckout, sheet1Updated: sheet1Updated
   }, syncResult);
@@ -577,14 +587,15 @@ function updateCheckoutDate_(body) {
 
   const syncResult = syncApartmenteryCheckoutDate_(resId, room, guest, checkin, newCheckout);
 
+  invalidateRoomStatusCache_();
   return Object.assign({
     ok: true, resId: resId, room: room, guest: guest, checkin: checkin,
     oldCheckout: oldCheckout, newCheckout: newCheckout
   }, syncResult);
 }
 
-function getCheckStatusMap_() {
-  const sheet = getOrCreateStatusSheet_();
+function getCheckStatusMap_(existingSs) {
+  const sheet = getOrCreateStatusSheet_(existingSs);
   const data = sheet.getDataRange().getValues();
   const map = {};
   for (let i = 1; i < data.length; i++) {
@@ -1358,6 +1369,17 @@ function getInvoiceToCreate_(ss, todayStr) {
  *   stay ที่ checked-in อยู่ หรือกำลังจะเข้า ไม่ใช่แค่ booking ที่ยังไม่ add invoice)
  * ============================================================ */
 function getRoomStatus_() {
+  // Cache the whole response — this used to open the spreadsheet TWICE
+  // (once here, once inside getCheckStatusMap_) and read two full sheets
+  // from scratch on every single Calendar/dashboard load, with zero
+  // caching. That's the main cause of slow page loads: every tab switch
+  // re-paid the full GAS+Sheets round trip. A short cache makes repeat
+  // navigation near-instant while staying fresh enough for day-to-day use.
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'roomStatus_v1';
+  const cached = cache.get(cacheKey);
+  if (cached) return JSON.parse(cached);
+
   const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
   const src = ss.getSheetByName(SRC_BOOKING_SHEET);
   if (!src) throw new Error('ไม่พบชีต: ' + SRC_BOOKING_SHEET);
@@ -1366,7 +1388,7 @@ function getRoomStatus_() {
   const header = data[0];
   const rows = data.slice(1).filter(r => r.join('').trim() !== '');
   const idx = indexMap_(header, ['เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์', 'Channel', 'ResId', 'Note']);
-  const statusMap = getCheckStatusMap_();
+  const statusMap = getCheckStatusMap_(ss); // reuse the already-open spreadsheet — avoid a 2nd openById
 
   const stays = rows.map(r => {
     const resId = String(r[idx.ResId] || '').trim();
@@ -1384,7 +1406,15 @@ function getRoomStatus_() {
     };
   }).filter(s => s.checkin && s.checkout);
 
-  return { today: formatDateYMD_(new Date()), stays };
+  const result = { today: formatDateYMD_(new Date()), stays };
+  try {
+    // 20s TTL: long enough to absorb repeat tab-switches/re-mounts, short
+    // enough that a check-in/move/cancel is reflected almost immediately.
+    cache.put(cacheKey, JSON.stringify(result), 20);
+  } catch (e) {
+    // Response too large for CacheService (100KB/key) — fine, just skip caching.
+  }
+  return result;
 }
 
 /* ============================================================
@@ -1816,6 +1846,7 @@ function cancelBooking_(resId) {
           muteHttpExceptions: true
         });
       } catch(e) { Logger.log('LINE notify error: ' + e); }
+      invalidateRoomStatusCache_();
       return {
         ok: true, room: newRoom, checkoutUpdated: newCheckoutYMD,
         apartmenteryEndDate: aptEndDate,

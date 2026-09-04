@@ -186,6 +186,7 @@ function moveGuestRoom_(body) {
       timestamp: new Date(),
     });
     notifyMaidGroupRoomMove_(booking, oldRoomNum, newRoom, hasInvoice, checkStart, result);
+    invalidateRoomStatusCache_();
   }
 
   return result;
