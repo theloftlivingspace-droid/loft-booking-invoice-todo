@@ -404,25 +404,35 @@ function earlyCheckout_(body) {
 
   // 1) Log to the CheckStatus sheet (existing behavior — per-device/audit trail)
   const sheet = getOrCreateStatusSheet_();
-  const row = findStatusRow_(sheet, resId);
   // ── Idempotency guard ──────────────────────────────────────────────────
   // ถ้า resId นี้เคย checkout ไปแล้วด้วย newCheckout เดียวกัน (CheckedOutAt
   // มีค่าอยู่แล้ว + NewCheckoutDate ตรงกัน) ถือว่าเป็นการยิงซ้ำ (เช่น เปิด
   // แดชบอร์ดพร้อมกัน 2 แท็บ/อุปกรณ์ แล้ว auto-checkout ทั้งคู่แข่งกันยิงก่อน
   // state จะ sync) → ข้าม LINE notify ซ้ำ แต่ยัง log ทับ timestamp ไว้เผื่อ
   // อยากรู้ว่ามีการยิงซ้ำเกิดขึ้นจริง
+  //
+  // read-check-write ทั้งก้อนต้องอยู่ใน script lock เดียวกัน ไม่งั้น 2
+  // requests ที่มาใกล้ๆ กัน (2 แท็บ/อุปกรณ์) จะอ่าน "ยังไม่เคย checkout"
+  // พร้อมกันได้ทั้งคู่ก่อนที่อีกฝั่งจะเขียนเสร็จ → ยิง LINE ซ้ำ (บั๊กที่เจอจริง)
   var alreadyNotified = false;
-  if (row === -1) {
-    sheet.appendRow([resId, '', now, isEarly ? 'TRUE' : 'FALSE', newCheckout]);
-  } else {
-    var prevCheckedOutAt = sheet.getRange(row, 3).getValue();
-    var prevNewCheckout  = String(sheet.getRange(row, 5).getValue() || '');
-    if (prevCheckedOutAt && prevNewCheckout === newCheckout) {
-      alreadyNotified = true;
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const row = findStatusRow_(sheet, resId);
+    if (row === -1) {
+      sheet.appendRow([resId, '', now, isEarly ? 'TRUE' : 'FALSE', newCheckout]);
+    } else {
+      var prevCheckedOutAt = sheet.getRange(row, 3).getValue();
+      var prevNewCheckout  = String(sheet.getRange(row, 5).getValue() || '');
+      if (prevCheckedOutAt && prevNewCheckout === newCheckout) {
+        alreadyNotified = true;
+      }
+      sheet.getRange(row, 3).setValue(now);
+      sheet.getRange(row, 4).setValue(isEarly ? 'TRUE' : 'FALSE');
+      sheet.getRange(row, 5).setValue(newCheckout);
     }
-    sheet.getRange(row, 3).setValue(now);
-    sheet.getRange(row, 4).setValue(isEarly ? 'TRUE' : 'FALSE');
-    sheet.getRange(row, 5).setValue(newCheckout);
+  } finally {
+    lock.releaseLock();
   }
   if (alreadyNotified) {
     invalidateRoomStatusCache_();
