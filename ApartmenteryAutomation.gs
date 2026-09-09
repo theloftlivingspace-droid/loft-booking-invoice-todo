@@ -664,6 +664,27 @@ function debugSupa0909InvoiceItem() {
   }
   Logger.log('matchedConfCodes has HM82WNZE55? ' + matchedConfCodes.has('HM82WNZE55'));
 
+  // Find the actual poisoning row(s): any row with status containing
+  // 'Matched' whose Conf. Code field includes HM82WNZE55 anywhere
+  // (comma-joined or not).
+  for (var rp = 1; rp < data.length; rp++) {
+    var rowp = data[rp];
+    if (rowp.join('').trim() === '') continue;
+    var statusp = String(rowp[idx['สถานะ']] || '').trim();
+    var confCodep = String(rowp[idx['Conf. Code']] || '').trim();
+    if (statusp.indexOf('Matched') >= 0 && confCodep.indexOf('HM82WNZE55') >= 0) {
+      Logger.log('POISONING ROW ' + (rp + 1) + ': ' + JSON.stringify({
+        bookingId: String(rowp[idx['Booking ID']] || ''),
+        status: statusp,
+        confCode: confCodep,
+        guest: String(rowp[idx['ชื่อแขก']] || ''),
+        net: rowp[idx['NET (THB)']],
+        detected: rowp[idx['วันที่ตรวจพบ']],
+      }));
+    }
+  }
+
+
   for (var r2 = 1; r2 < data.length; r2++) {
     var row2 = data[r2];
     if (row2.join('').trim() === '') continue;
