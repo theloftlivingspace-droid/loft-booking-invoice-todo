@@ -767,6 +767,20 @@ function doGet_(e) {
     return jsonResponse_(backfillApartmenteryInvoiceIds(limit));
   }
 
+  // WRITES to Apartmentery — creates real invoices/receipts for every
+  // eligible Payout_Income_Log row not yet marked invoice_done_v1 (not
+  // just the one row someone had in mind when tapping the link). Added
+  // 2026-09-09 so Nathan doesn't have to wait for the hourly
+  // runApartmenteryAutomation trigger after a manual Payout_Income_Log
+  // backfill (e.g. HM82WNZE55 2nd Resolution Payout leg). Safe to re-run —
+  // already-done invoiceKeys are skipped (see getInvoiceToCreate_'s
+  // doneMap check) — but every tap is a real external write, so this is
+  // intentionally NOT linked from anywhere automatic; only call it when
+  // you mean to.
+  if (action === 'runAutoCreateInvoices') {
+    return jsonResponse_(autoCreateApartmenteryInvoicesAndReceipts());
+  }
+
   // Fully read-only — doesn't touch Apartmentery at all, only cross-references
   // invoice_apt_ids_v1 against the sheet — so no batching/limit needed like
   // backfillApartmenteryInvoiceIds above.
