@@ -712,6 +712,39 @@ function debugSupa0909InvoiceItem() {
   return 'done';
 }
 
+function debugSupa0909CheckSCBRow() {
+  // Follow-up to debugSupa0909InvoiceItem: row 585 (SCB-2026-09-09-1200.00,
+  // confCode "HM82WNZE55, HM82WNZE55") has a comma confCode, which means
+  // getInvoiceToCreate_'s filter does NOT exclude it (the exclusion only
+  // applies to non-comma rows). So this SCB row may itself be the intended
+  // single ฿1,200 invoice item (replacing the two individual ฿600 legs) —
+  // in which case the real bug isn't the filter/matchedConfCodes logic at
+  // all, it's that this invoiceKey got marked done_v1 without an invoice
+  // ever actually being created. Checks exactly that, using the REAL
+  // getInvoiceToCreate_() (not the hand-rolled filter from the other debug
+  // function) so entries/notes-parsing/invoiceKey construction all run
+  // for real.
+  var ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  var todayStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
+  var invoiceItems = getInvoiceToCreate_(ss, todayStr);
+  Logger.log('total invoiceItems: ' + invoiceItems.length);
+
+  var scbItem = invoiceItems.filter(function(inv) {
+    return String(inv.bookingId||'').indexOf('SCB-2026-09-09-1200.00') >= 0;
+  });
+  Logger.log('items for bookingId SCB-2026-09-09-1200.00 (' + scbItem.length + '):');
+  Logger.log(JSON.stringify(scbItem, null, 2));
+
+  var doneMap = getProp_(PROP_KEY_INVOICE_DONE);
+  var aptIdsMap = getProp_(PROP_KEY_INVOICE_APT_IDS);
+  Object.keys(doneMap).forEach(function(k) {
+    if (k.indexOf('HM82WNZE55') >= 0 || k.indexOf('SCB-2026-09-09-1200.00') >= 0) {
+      Logger.log('doneMap[' + k + '] = ' + doneMap[k] + ' | aptIds = ' + (aptIdsMap[k] || '(none)'));
+    }
+  });
+  return 'done';
+}
+
 function autoCreateApartmenteryInvoicesAndReceipts() {
   const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
   const todayStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
