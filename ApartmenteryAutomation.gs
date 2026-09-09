@@ -695,6 +695,17 @@ function autoCreateApartmenteryInvoicesAndReceipts() {
   return result;
 }
 
+// Debug wrapper — autoCreateApartmenteryInvoicesAndReceipts() only returns
+// its result object, it never Logger.logs anything itself, so running it
+// straight from the Apps Script editor shows an empty Execution log even
+// when it worked (or silently hit result.sessionExpired / result.errors).
+// Run THIS instead when you need to actually see what happened.
+function debugRunAutoCreateInvoices() {
+  var result = autoCreateApartmenteryInvoicesAndReceipts();
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
 /**
  * Backfill for invoices created BEFORE invoice_apt_ids_v1 existed to
  * persist the Apartmentery invoiceId (added 2026-07-30). Those invoices
