@@ -712,6 +712,23 @@ function debugSupa0909InvoiceItem() {
   return 'done';
 }
 
+// Root cause (found 2026-09-09): processPayoutToReceipt()'s duplicate-invoice
+// guard matches on booking+amount only, so when a split payout has two equal
+// legs (this case: ฿600 + ฿600), the 2nd leg's invoice attempt gets silently
+// "reused" onto the 1st leg's invoiceId instead of creating its own. Both
+// invoiceKeys ended up pointing at invoice 2862493 (which only ever actually
+// billed ฿600). Nathan manually created the missing 2nd ฿600 invoice
+// (2862641) directly in Apartmentery. This just corrects our own tracking
+// (invoice_apt_ids_v1) to point entry #1 at the real invoice that covers it,
+// so the 🧾 link in the-loft-admin and any future backfill/audit runs show
+// the truth instead of a phantom duplicate reference. Does not touch
+// Apartmentery itself — pure bookkeeping correction on our side.
+function fixSupa0909SecondInvoiceId() {
+  var ok = setInvoiceApartmenteryIds('SCB-2026-09-09-1200.00#HM82WNZE55#1', '332201', '2862641');
+  Logger.log('setInvoiceApartmenteryIds result: ' + ok);
+  return ok;
+}
+
 function debugSupa0909CheckSCBRow() {
   // Follow-up to debugSupa0909InvoiceItem: row 585 (SCB-2026-09-09-1200.00,
   // confCode "HM82WNZE55, HM82WNZE55") has a comma confCode, which means
