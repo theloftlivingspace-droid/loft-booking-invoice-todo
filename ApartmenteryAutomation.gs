@@ -623,6 +623,40 @@ function autoCreateApartmenteryBookings() {
  * (and therefore its apartmentery bookingId) using the same matchKeys_
  * fuzzy-match already used elsewhere in this project.
  */
+function debugSupa0909InvoiceItem() {
+  // Diagnostic-only, touches nothing. autoCreateApartmenteryInvoicesAndReceipts
+  // returned {created:0, skipped:0} for HM82WNZE55's 2nd Resolution Payout leg
+  // — that specific shape (both zero) only happens when the item never even
+  // reaches the created/skipped counters at all (filtered out of
+  // getInvoiceToCreate_'s list entirely, or hits the silent `if (inv.done)
+  // continue;` before result.skipped++ ever runs). This logs exactly which
+  // of those it is, for bookingId ABB-HM82WNZE55-RES-20260909-2.
+  var ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  var todayStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
+  var invoiceItems = getInvoiceToCreate_(ss, todayStr);
+  var bookingItems = getBookingToAdd_(ss, todayStr);
+
+  var target = invoiceItems.filter(function(inv) {
+    return String(inv.bookingId||'').indexOf('HM82WNZE55') >= 0;
+  });
+  Logger.log('invoiceItems matching HM82WNZE55 (' + target.length + '):');
+  Logger.log(JSON.stringify(target, null, 2));
+
+  var keyToResId = {};
+  bookingItems.forEach(function(b) {
+    var aptId = getApartmenteryBookingId_(b.resId);
+    if (!aptId) return;
+    (b.matchKeys || []).forEach(function(k) { if (!keyToResId[k]) keyToResId[k] = { resId: b.resId, guest: b.guest, aptId: aptId }; });
+  });
+  target.forEach(function(inv) {
+    var hit = null;
+    (inv.matchKeys || []).forEach(function(k) { if (!hit && keyToResId[k]) hit = { key: k, info: keyToResId[k] }; });
+    Logger.log('invoiceKey=' + inv.invoiceKey + ' done=' + inv.done + ' resolvedBooking=' + JSON.stringify(hit));
+  });
+
+  return { invoiceItemsFound: target.length };
+}
+
 function autoCreateApartmenteryInvoicesAndReceipts() {
   const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
   const todayStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
