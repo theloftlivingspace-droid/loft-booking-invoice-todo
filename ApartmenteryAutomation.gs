@@ -631,30 +631,64 @@ function debugSupa0909InvoiceItem() {
   // getInvoiceToCreate_'s list entirely, or hits the silent `if (inv.done)
   // continue;` before result.skipped++ ever runs). This logs exactly which
   // of those it is, for bookingId ABB-HM82WNZE55-RES-20260909-2.
+  //
+  // 2026-09-09 update: it's confirmed filtered out before the per-item loop
+  // (invoiceItems matching HM82WNZE55 came back completely empty — not even
+  // the main already-invoiced row appeared). Re-implements getInvoiceToCreate_'s
+  // own `filtered` step inline, logging every raw field for each HM82WNZE55
+  // row so we can see the EXACT status/confCode/bookingId strings (char
+  // codes included) rather than trusting a Drive markdown export, which has
+  // been chunking/repeating headers and can't be trusted for exact bytes.
   var ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
-  var todayStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
-  var invoiceItems = getInvoiceToCreate_(ss, todayStr);
-  var bookingItems = getBookingToAdd_(ss, todayStr);
+  var src = ss.getSheetByName(SRC_PAYOUT_SHEET);
+  var data = src.getDataRange().getValues();
+  var header = data[0];
+  var idx = indexMap_(header, [
+    'วันที่ตรวจพบ', 'OTA', 'Booking ID', 'Conf. Code', 'ชื่อแขก', 'ห้อง',
+    'เช็คอิน', 'เช็คเอาท์', 'คืน', 'ยอดรวม (THB)', 'Commission (THB)', 'NET (THB)', 'สถานะ', 'หมายเหตุ',
+  ]);
+  Logger.log('idx map: ' + JSON.stringify(idx));
 
-  var target = invoiceItems.filter(function(inv) {
-    return String(inv.bookingId||'').indexOf('HM82WNZE55') >= 0;
-  });
-  Logger.log('invoiceItems matching HM82WNZE55 (' + target.length + '):');
-  Logger.log(JSON.stringify(target, null, 2));
+  var matchedConfCodes = new Set();
+  var summaryBookingIds = new Set();
+  for (var r = 1; r < data.length; r++) {
+    var row = data[r];
+    if (row.join('').trim() === '') continue;
+    var status = String(row[idx['สถานะ']] || '').trim();
+    var confCode = String(row[idx['Conf. Code']] || '').trim();
+    var bookingId = String(row[idx['Booking ID']] || '').trim();
+    if (status.indexOf('Matched') >= 0) {
+      confCode.split(',').forEach(function(c) { matchedConfCodes.add(c.trim()); });
+    }
+    if (confCode.indexOf(',') >= 0 && bookingId) summaryBookingIds.add(bookingId);
+  }
+  Logger.log('matchedConfCodes has HM82WNZE55? ' + matchedConfCodes.has('HM82WNZE55'));
 
-  var keyToResId = {};
-  bookingItems.forEach(function(b) {
-    var aptId = getApartmenteryBookingId_(b.resId);
-    if (!aptId) return;
-    (b.matchKeys || []).forEach(function(k) { if (!keyToResId[k]) keyToResId[k] = { resId: b.resId, guest: b.guest, aptId: aptId }; });
-  });
-  target.forEach(function(inv) {
-    var hit = null;
-    (inv.matchKeys || []).forEach(function(k) { if (!hit && keyToResId[k]) hit = { key: k, info: keyToResId[k] }; });
-    Logger.log('invoiceKey=' + inv.invoiceKey + ' done=' + inv.done + ' resolvedBooking=' + JSON.stringify(hit));
-  });
-
-  return { invoiceItemsFound: target.length };
+  for (var r2 = 1; r2 < data.length; r2++) {
+    var row2 = data[r2];
+    if (row2.join('').trim() === '') continue;
+    var bookingId2 = String(row2[idx['Booking ID']] || '').trim();
+    if (bookingId2.indexOf('HM82WNZE55') < 0) continue;
+    var status2 = String(row2[idx['สถานะ']] || '').trim();
+    var confCode2 = String(row2[idx['Conf. Code']] || '').trim();
+    var note2 = String(row2[idx['หมายเหตุ']] || '').trim();
+    var passStatus = PAYOUT_STATUSES_FOR_INVOICE.indexOf(status2) >= 0;
+    var poisonedByMatched = (status2.indexOf('Matched') < 0) && matchedConfCodes.has(confCode2);
+    var poisonedBySummary = (confCode2.indexOf(',') < 0) && summaryBookingIds.has(bookingId2);
+    var startsWithArrow = note2.indexOf('\u21b3') === 0;
+    Logger.log(JSON.stringify({
+      row: r2 + 1,
+      bookingId: bookingId2,
+      status: status2, statusCharCodes: status2.split('').map(function(c){return c.charCodeAt(0);}),
+      inAllowedList: passStatus,
+      confCode: confCode2,
+      startsWithArrow: startsWithArrow,
+      poisonedByMatchedConfCodes: poisonedByMatched,
+      poisonedBySummaryBookingIds: poisonedBySummary,
+      wouldPassFilter: !startsWithArrow && passStatus && !poisonedByMatched && !poisonedBySummary,
+    }, null, 2));
+  }
+  return 'done';
 }
 
 function autoCreateApartmenteryInvoicesAndReceipts() {
