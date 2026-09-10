@@ -1136,7 +1136,7 @@ function _extractTextareaValue_(html, fieldId) {
  * @param {number} rentalPrice
  * @param {string} [paidDateStr]
  */
-function processPayoutToReceiptForRoom(roomRaw, bookingId, rentalPrice, paidDateStr) {
+function processPayoutToReceiptForRoom(roomRaw, bookingId, rentalPrice, paidDateStr, alreadyAccountedCount) {
   const unit = getApartmenteryUnitForRoom(roomRaw);
   if (!unit) {
     return {
@@ -1145,10 +1145,10 @@ function processPayoutToReceiptForRoom(roomRaw, bookingId, rentalPrice, paidDate
               `in ApartmenteryClient.gs, or create the invoice/receipt manually for now.`
     };
   }
-  return processPayoutToReceipt(unit.branchId, unit.unitId, bookingId, rentalPrice, paidDateStr);
+  return processPayoutToReceipt(unit.branchId, unit.unitId, bookingId, rentalPrice, paidDateStr, alreadyAccountedCount);
 }
 
-function processPayoutToReceipt(branchId, unitId, bookingId, rentalPrice, paidDateStr) {
+function processPayoutToReceipt(branchId, unitId, bookingId, rentalPrice, paidDateStr, alreadyAccountedCount) {
   // Idempotency guard (added 2026-08-20, Nathan flagged duplicate invoices —
   // e.g. room 209 / Gregory Dunlop had two IVB... invoices for the exact
   // same amount+booking). Root cause: createApartmenteryInvoice() had no
@@ -1165,14 +1165,38 @@ function processPayoutToReceipt(branchId, unitId, bookingId, rentalPrice, paidDa
   // a new one, and skip receipt creation too (can't cheaply verify from here
   // whether the existing invoice already has a receipt — safer to leave that
   // for manual/backfill handling than risk a duplicate receipt as well).
+  //
+  // BUG FOUND 2026-09-09 (HM82WNZE55, room 203, two ฿600 Resolution Payout
+  // legs): matching on amount alone can't tell "this is MY OWN earlier
+  // partial-failure retry" apart from "a SIBLING split invoiceKey with the
+  // same amount already has its own separate invoice" — both look identical
+  // from here (one existing invoice, amount matches). The 2nd ฿600 leg's
+  // attempt found the 1st leg's freshly-created ฿600 invoice, assumed it was
+  // its own orphaned retry, and reused it — so both invoiceKeys ended up
+  // pointing at one invoice that only ever billed ฿600, and the 2nd ฿600
+  // silently never got charged. Nathan caught it by comparing Apartmentery's
+  // invoice list to Payout_Income_Log by hand; the automation itself never
+  // surfaced an error, because a "successful reuse" and this bug look
+  // identical from inside this function alone.
+  //
+  // Fix: the caller now tells us how many sibling invoiceKeys (same
+  // bookingId + same amount, excluding this one) are ALREADY marked done —
+  // i.e. already legitimately hold their own invoice. We only treat an
+  // existing amount-matching invoice as "mine to reuse" if there are MORE
+  // matching invoices than already-claimed siblings — the (alreadyAccountedCount+1)-th
+  // match, 0-indexed as matching[alreadyAccountedCount]. If every existing
+  // match is already claimed by a done sibling, there's no orphan for us to
+  // reuse, so we fall through and create a genuinely new invoice instead.
+  alreadyAccountedCount = alreadyAccountedCount || 0;
   const existingInvoices = getExistingApartmenteryInvoices_(branchId, unitId, bookingId);
   const rentalPriceNum = Number(rentalPrice);
-  const dup = existingInvoices.find(function (e) {
+  const matching = existingInvoices.filter(function (e) {
     return Math.abs(Number(e.amount) - rentalPriceNum) < 0.01;
   });
+  const dup = matching.length > alreadyAccountedCount ? matching[alreadyAccountedCount] : null;
   if (dup) {
-    Logger.log(`processPayoutToReceipt: booking ${bookingId} already has invoice ` +
-      `${dup.invoiceId} for amount ${rentalPrice} — reusing it instead of creating a duplicate.`);
+    Logger.log(`processPayoutToReceipt: booking ${bookingId} already has an unclaimed invoice ` +
+      `${dup.invoiceId} for amount ${rentalPrice} (${matching.length} matching, ${alreadyAccountedCount} already claimed by done siblings) — reusing it instead of creating a duplicate.`);
     return {
       invoiceId: dup.invoiceId,
       receiptId: null,

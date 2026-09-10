@@ -813,7 +813,20 @@ function autoCreateApartmenteryInvoicesAndReceipts() {
     if (!aptBookingId) { result.skipped++; continue; }
 
     try {
-      const outcome = processPayoutToReceiptForRoom(inv.room, aptBookingId, inv.net, todayStr);
+      // See processPayoutToReceipt() in ApartmenteryClient.gs for why this
+      // count exists: its dup-guard can't tell "my own earlier partial-
+      // failure retry" apart from "a sibling split entry with the same
+      // amount already got its own invoice" using amount-matching alone.
+      // Telling it how many sibling invoiceKeys (same bookingId + same net,
+      // excluding this one) are ALREADY done lets it skip past those
+      // already-claimed invoices and only reuse a genuinely unclaimed one.
+      const alreadyAccountedCount = invoiceItems.filter(other =>
+        other.bookingId === inv.bookingId &&
+        other.invoiceKey !== inv.invoiceKey &&
+        Math.abs(Number(other.net) - Number(inv.net)) < 0.01 &&
+        other.done
+      ).length;
+      const outcome = processPayoutToReceiptForRoom(inv.room, aptBookingId, inv.net, todayStr, alreadyAccountedCount);
       if (outcome && outcome.skipped) {
         result.skipped++;
         continue;
