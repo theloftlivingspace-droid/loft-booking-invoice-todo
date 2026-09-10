@@ -171,6 +171,7 @@ function uploadDoc_(body) {
   try {
     getOrCreateDocsSheet_().appendRow([resId, room, checkin, fileId, fileName, mimeType, uploadedAt]);
   } catch (e) { /* non-fatal */ }
+  invalidateAllDocsCache_();
 
   return {
     ok: true,
@@ -201,11 +202,24 @@ function deleteDoc_(body) {
       if (data[i][3] === fileId) { sheet.deleteRow(i + 1); break; }
     }
   } catch (e) { /* non-fatal */ }
+  invalidateAllDocsCache_();
 
   return { ok: true };
 }
 
 function getAllDocs_() {
+  // getAllDocs_ used to do a fresh full scan of every booking-doc subfolder
+  // (and every file inside each) on EVERY call. That's O(all bookings ever
+  // made) and only gets slower as the business accumulates history — a big
+  // enough tree can blow past GAS's execution limit or the Vercel proxy's
+  // timeout, which the client silently swallows as "no docs" (see
+  // refreshDocs() in CheckInOut.tsx) instead of a visible error. A short
+  // cache means only one caller per window pays for the full scan.
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'allDocs_v1';
+  const cached = cache.get(cacheKey);
+  if (cached) return JSON.parse(cached);
+
   const root = getDocsRootFolder_();
   const subfolders = root.getFolders();
   const docs = {}; // "{room}_{checkin}_{resId}" -> DocFile[]  (matches folderKey() in CheckInOut.tsx)
@@ -221,7 +235,17 @@ function getAllDocs_() {
     if (list.length) docs[key] = list;
   }
 
-  return { ok: true, docs: docs };
+  const result = { ok: true, docs: docs };
+  try {
+    cache.put(cacheKey, JSON.stringify(result), 60);
+  } catch (e) {
+    // Response too large for CacheService (100KB/key) — fine, just skip caching.
+  }
+  return result;
+}
+
+function invalidateAllDocsCache_() {
+  try { CacheService.getScriptCache().remove('allDocs_v1'); } catch (e) { /* best-effort */ }
 }
 
 /* ============================================================
