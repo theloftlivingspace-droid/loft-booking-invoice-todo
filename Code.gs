@@ -753,6 +753,7 @@ function doGet_(e) {
     const done = e.parameter.done === 'true';
     setBookingDone(id, done);
     triggerStyleSheet1_();
+    invalidateDashboardCache_();
     return jsonResponse_({ ok: true });
   }
 
@@ -761,6 +762,7 @@ function doGet_(e) {
     const done = e.parameter.done === 'true';
     setInvoiceDone(id, done);
     triggerStyleSheet1_();
+    invalidateDashboardCache_();
     return jsonResponse_({ ok: true });
   }
 
@@ -769,12 +771,14 @@ function doGet_(e) {
     const note = e.parameter.note || '';
     const result = setBookingNote(id, note);
     triggerStyleSheet1_();
+    invalidateDashboardCache_();
     return jsonResponse_(result);
   }
 
   if (action === 'cancelBooking') {
     const id = e.parameter.id || '';
     const result = cancelBooking_(id);
+    invalidateDashboardCache_();
     return jsonResponse_(result);
   }
 
@@ -1008,17 +1012,41 @@ function fillInvoiceApartmenteryBookingIdsFallback_(bookingItems, invoiceItems) 
   return invoiceItems;
 }
 
+/* ============================================================
+ *  Dashboard (booking/invoice todo list) — reads Sheet1 + Script
+ *  Properties on every load with no caching, unlike getRoomStatus_.
+ *  Same class of problem: this only gets slower as Sheet1 grows, and on
+ *  a slow/cold GAS run this is exactly what was timing out the Booking
+ *  tab in the-loft-admin (api/gas-proxy.js). Short cache, invalidated by
+ *  every mutating action below (setBookingDone, setInvoiceDone, setNote,
+ *  cancelBooking) so marking something done still reflects immediately.
+ * ============================================================ */
 function getDashboardData() {
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'dashboardData_v1';
+  const cached = cache.get(cacheKey);
+  if (cached) return JSON.parse(cached);
+
   const ss = SpreadsheetApp.openById(SOURCE_SHEET_ID);
   const todayStr = formatDateYMD_(new Date());
   const booking = getBookingToAdd_(ss, todayStr);
   const invoice = fillInvoiceApartmenteryBookingIdsFallback_(booking, getInvoiceToCreate_(ss, todayStr));
-  return {
+  const result = {
     today: todayStr,
     booking: booking,
     invoice: invoice,
     pendingMatch: getPendingMatchPayouts_(ss),
   };
+  try {
+    cache.put(cacheKey, JSON.stringify(result), 20);
+  } catch (e) {
+    // Response too large for CacheService (100KB/key) — fine, just skip caching.
+  }
+  return result;
+}
+
+function invalidateDashboardCache_() {
+  try { CacheService.getScriptCache().remove('dashboardData_v1'); } catch (e) { /* best-effort */ }
 }
 
 /* ============================================================
