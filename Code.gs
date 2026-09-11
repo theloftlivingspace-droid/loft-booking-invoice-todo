@@ -725,6 +725,31 @@ function migrateStrayRootFiles_() {
 function doGet_(e) {
   const action = e && e.parameter && e.parameter.action;
 
+  if (action === 'debugFindPayPalInvoiceKeys0911') {
+    // Diagnostic: fixKariRamseyWrongInvoice0911 reset invoiceKey
+    // 'SCB-2026-09-11-6353.40#PP-20260902-KariRamsey' but reported
+    // wasDone:false — meaning that specific key was never actually marked
+    // done, so it isn't what produced the wrong invoice on booking 332073.
+    // Lists every invoice_done_v1/invoice_apt_ids_v1 entry whose key
+    // touches this batch (any key containing 'SCB-2026-09-11-6353.40' or
+    // '332073'), to find the real one.
+    var doneMapD = getProp_(PROP_KEY_INVOICE_DONE);
+    var aptIdsMapD = getProp_(PROP_KEY_INVOICE_APT_IDS);
+    var seenMapD = getProp_(PROP_KEY_INVOICE_SEEN);
+    var hits = [];
+    Object.keys(doneMapD).forEach(function(k) {
+      if (k.indexOf('6353.40') >= 0 || k.indexOf('KariRamsey') >= 0 || k.indexOf('kariramsey') >= 0) {
+        hits.push({ key: k, done: doneMapD[k], aptIds: aptIdsMapD[k] || null, seen: seenMapD[k] || null });
+      }
+    });
+    Object.keys(aptIdsMapD).forEach(function(k) {
+      if ((aptIdsMapD[k]+'').indexOf('332073') >= 0 && hits.every(function(h){return h.key!==k;})) {
+        hits.push({ key: k, done: doneMapD[k] || false, aptIds: aptIdsMapD[k], seen: seenMapD[k] || null });
+      }
+    });
+    return jsonResponse_({ ok: true, hits: hits });
+  }
+
   if (action === 'checkKariRamseyDirectBookingName0911') {
     // Read-only check: what does booking 332326's customerName actually say
     // right now? Confirm before changing anything.
