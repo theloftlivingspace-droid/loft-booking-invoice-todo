@@ -1332,20 +1332,24 @@ function getInvoiceToCreate_(ss, todayStr) {
         if (entries[k].guest === 'Guest') continue;
         const ci_k = (entries[k].ci) ? entries[k].ci : checkin;
         const found_k = findRoomByName(entries[k].guest || firstGuest, ci_k);
-        if (found_k) { batchRoomCandidate = found_k; break; }
+        if (found_k) { batchRoomCandidate = found_k; break; } // {room, checkin, checkout}
       }
     }
+    // Always returns {room, checkin, checkout} — checkin/checkout are null
+    // when we only know the room (manual override, 'Guest' placeholder, or
+    // no Sheet1 match at all), non-null when resolved via findRoomByName so
+    // the caller can backfill a blank invoice checkin (see lookupRoomFromIndex_).
     function findRoomForGuest(guestName, entryCi, entryConfCode) {
       if (entryConfCode && MANUAL_INVOICE_ROOM_OVERRIDES[entryConfCode]) {
-        return MANUAL_INVOICE_ROOM_OVERRIDES[entryConfCode];
+        return { room: MANUAL_INVOICE_ROOM_OVERRIDES[entryConfCode], checkin: null, checkout: null };
       }
       const found = findRoomByName(guestName, entryCi);
       if (found) return found;
-      if (guestName === 'Guest' && batchRoomCandidate) return batchRoomCandidate;
+      if (guestName === 'Guest' && batchRoomCandidate) return { room: batchRoomCandidate.room, checkin: null, checkout: null };
       // หาไม่เจอใน Sheet1 (เช่น booking เก่าที่ถูกลบหลัง checkout) —
       // ห้ามคืน room string รวม (เช่น "363, 203") เพราะจะดู "ลิงค์ผิดห้อง"
       // ให้ flag ชัดเจนว่าไม่ทราบห้องแทน เพื่อให้ผู้ใช้ตรวจมือ
-      return '⚠️ ไม่ทราบห้อง (' + room + ')';
+      return { room: '⚠️ ไม่ทราบห้อง (' + room + ')', checkin: null, checkout: null };
     }
 
     // invoiceKey: ถ้ามีหลาย entries และ conf ซ้ำ ใส่ index กำกับ (#0, #1)
@@ -1381,13 +1385,22 @@ function getInvoiceToCreate_(ss, todayStr) {
       // cancellation payout, conf HMFTY4YTTK, stuck at "ห้อง ?" despite the
       // cancelled booking ABB-e4bdb0e9a1-20260705 being an exact name+date match).
       const roomNeedsLookup = (entries.length > 1 && roomList.length > 1) || !roomNum_(room);
-      const entryRoom = roomNeedsLookup ? findRoomForGuest(entryGuest, entryCheckin, entry.confCode) : room;
+      const lookup = roomNeedsLookup ? findRoomForGuest(entryGuest, entryCheckin, entry.confCode) : { room, checkin: null, checkout: null };
+      const entryRoom = lookup.room;
+      // Backfill a blank stay date from the matched Sheet1 booking (PayPal
+      // direct-booking rows have no dates of their own — see
+      // lookupRoomFromIndex_ header comment) so matchKeys below get a real
+      // date instead of '', which is what let a resolved room still show
+      // "No booking"/never auto-invoice even though Sheet1 had the booking
+      // (Kari Ramsey / Florian Lintner, flagged by Nathan 2026-09-11).
+      const resolvedCheckin  = entryCheckin  || lookup.checkin  || '';
+      const resolvedCheckout = entryCheckout || lookup.checkout || '';
       const aptIdsRaw = aptIdsMap[invoiceKey] || '';
       const aptIdsParts = aptIdsRaw.split(':');
       out.push({
         invoiceKey, bookingId, room: entryRoom,
         guest: entryGuest,
-        checkin: entryCheckin, checkout: entryCheckout, nights: entryNights,
+        checkin: resolvedCheckin, checkout: resolvedCheckout, nights: entryNights,
         net: entries.length > 1 ? entry.net : totalNet,
         isSplitFromMulti: entries.length > 1,
         splitIndex: entries.length > 1 ? (i + 1) : null,
@@ -1397,7 +1410,7 @@ function getInvoiceToCreate_(ss, todayStr) {
         detectedToday: detectedDate === todayStr,
         firstSeen, isNewInList: isNewSeen,
         done: !!doneMap[invoiceKey],
-        matchKeys: makeMatchKeys_(entryGuest, entryCheckin, entryRoom),
+        matchKeys: makeMatchKeys_(entryGuest, resolvedCheckin, entryRoom),
         apartmenteryBookingId: aptIdsParts[0] || '',
         apartmenteryInvoiceId: aptIdsParts[1] || '',
       });
@@ -1483,21 +1496,35 @@ function buildBookingLookupIndex_(ss) {
   const rows = data.slice(1).filter(r => r.join('').trim() !== '');
   const idx = indexMap_(header, ['เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์']);
 
-  const index = {}; // namePart -> [{room, checkin}]
+  const index = {}; // namePart -> [{room, checkin, checkout}]
   rows.forEach(r => {
     const guest = String(r[idx['ชื่อแขก']] || '').trim();
     const room  = String(r[idx['เลขห้อง']] || '').trim();
     const rn    = roomNum_(room);
-    const checkin = formatCellDate_(r[idx['เช็คอิน']]);
+    const checkin  = formatCellDate_(r[idx['เช็คอิน']]);
+    const checkout = formatCellDate_(r[idx['เช็คเอาท์']]);
     if (!rn || !checkin) return;
     allNameParts_(guest).forEach(p => {
       if (!index[p]) index[p] = [];
-      index[p].push({ room: rn, checkin });
+      index[p].push({ room: rn, checkin, checkout });
     });
   });
   return index;
 }
 
+// Returns {room, checkin, checkout} of the best-matching Sheet1 booking, or
+// null if none found. Used to be room-only — but PayPal direct-booking rows
+// (see getInvoiceToCreate_) have no checkin date of their own (PayPal doesn't
+// report stay dates), which left entryCheckin '' even after the room was
+// correctly resolved here by name. makeMatchKeys_() bakes checkin into every
+// key ('n:name|date', 'cr:date|room'), so an empty date can never intersect
+// the booking's real dated keys — the invoice permanently shows "No booking"
+// in the-loft-admin and autoCreateApartmenteryInvoicesAndReceipts() skips it
+// forever, even though the Sheet1 row exists (confirmed by Nathan 2026-09-11,
+// Kari Ramsey/Florian Lintner — booking was added from the original Little
+// Hotelier email, room resolved correctly, but matchKeys never lined up).
+// Returning the matched checkin/checkout lets the caller backfill the blank
+// invoice dates before building matchKeys, instead of discarding them here.
 function lookupRoomFromIndex_(index, guestName, invoiceCheckin, allowedRoomList) {
   const parts = allNameParts_(guestName);
   const allowedNums = allowedRoomList.map(roomNum_).filter(Boolean);
@@ -1509,15 +1536,16 @@ function lookupRoomFromIndex_(index, guestName, invoiceCheckin, allowedRoomList)
       // Only consider rooms that are actually part of this invoice's room list —
       // never assign a room the invoice didn't even mention.
       if (allowedNums.length && allowedNums.indexOf(c.room) === -1) return;
-      // ถ้า invoiceCheckin ว่าง (multi-guest total row) → match by name+room only
+      // ถ้า invoiceCheckin ว่าง (multi-guest total row, or a PayPal row with no
+      // stay dates at all) → match by name+room only, take the first candidate.
       if (!invoiceCheckin) {
-        if (best === null) best = c.room;
+        if (best === null) best = c;
         return;
       }
       const dist = Math.abs(daysDiff_(invoiceCheckin, c.checkin));
       if (dist <= 3 && dist < bestDist) {
         bestDist = dist;
-        best = c.room;
+        best = c;
       }
     });
   });
