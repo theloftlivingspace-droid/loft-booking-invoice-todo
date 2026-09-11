@@ -607,6 +607,59 @@ function _getApartmenteryBookingEditFormState_(branchId, unitId, bookingId) {
  * @param {string} bookingId
  * @param {string} newEndDate  YYYY-MM-DD
  */
+/**
+ * Same read-edit-form-then-resubmit pattern as updateApartmenteryBookingEndDate
+ * (see that function's comment for why this approach — apartmentery has no
+ * PATCH-style partial update, only a full form resubmit), but for
+ * customerName instead of endDate. Added 2026-09-11: Nathan noticed Kari
+ * Ramsey's two separate bookings (Booking.com stay + Direct/PayPal stay,
+ * both room 210) both displayed as "Kari Ramsey / Booking" in Apartmentery —
+ * the Direct one should read "Kari Ramsey / Direct" per the existing
+ * "GuestName / Channel" convention (see autoCreateApartmenteryBookings in
+ * ApartmenteryAutomation.gs). Leaves every other field untouched.
+ */
+function updateApartmenteryBookingCustomerName(branchId, unitId, bookingId, newCustomerName) {
+  const state = _getApartmenteryBookingEditFormState_(branchId, unitId, bookingId);
+
+  const path = `/user/branch/${branchId}/unit/${unitId}/booking/${bookingId}/edit`;
+  const payload = {
+    startDate: state.startDate,
+    endDate: state.endDate,
+    note: state.note,
+    customerType: state.customerType,
+    customerId: state.customerId,
+    customerName: newCustomerName,
+    customerMobileNo: state.customerMobileNo,
+    customerIdNo: state.customerIdNo,
+    customerEmail: state.customerEmail,
+    customerNote: state.customerNote,
+    remindEvery: state.remindEvery,
+    reminderFrequency: state.reminderFrequency,
+    remindOnDayInMonth: state.remindOnDayInMonth,
+    remindOnDayInWeek: state.remindOnDayInWeek,
+    remindOnDayInMonthInYear: state.remindOnDayInMonthInYear,
+    remindOnMonthInYear: state.remindOnMonthInYear,
+    remindInvoiceDayBefore: state.remindInvoiceDayBefore
+  };
+  if (state.reminderChecked) payload.reminder = 'true';
+
+  const response = _apartmenteryFetch_(path, { method: 'post', payload: payload });
+
+  const code = response.getResponseCode();
+  if (code >= 300 && code < 400) {
+    return { ok: true, bookingId: bookingId, oldCustomerName: state.customerName, newCustomerName: newCustomerName };
+  }
+
+  Logger.log('updateApartmenteryBookingCustomerName FAILED — payload sent: ' + JSON.stringify(payload));
+  Logger.log('updateApartmenteryBookingCustomerName FAILED — response code ' + code + ', extracted error: ' +
+    _extractPlayErrorMessage_(response.getContentText()));
+
+  throw new Error(
+    `Updating customerName for booking ${bookingId} did not redirect as expected ` +
+    `(HTTP ${code}). Response may indicate a validation error — inspect manually.`
+  );
+}
+
 function updateApartmenteryBookingEndDate(branchId, unitId, bookingId, newEndDate) {
   const state = _getApartmenteryBookingEditFormState_(branchId, unitId, bookingId);
 

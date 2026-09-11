@@ -725,6 +725,25 @@ function migrateStrayRootFiles_() {
 function doGet_(e) {
   const action = e && e.parameter && e.parameter.action;
 
+  if (action === 'checkKariRamseyDirectBookingName0911') {
+    // Read-only check: what does booking 332326's customerName actually say
+    // right now? Confirm before changing anything.
+    var unit0911c = getApartmenteryUnitForRoom('210');
+    var state0911c = _getApartmenteryBookingEditFormState_(unit0911c.branchId, unit0911c.unitId, '332326');
+    return jsonResponse_({ ok: true, bookingId: '332326', customerName: state0911c.customerName,
+      startDate: state0911c.startDate, endDate: state0911c.endDate });
+  }
+
+  if (action === 'fixKariRamseyDirectBookingName0911') {
+    // Fixes booking 332326's customerName to follow the existing "Guest /
+    // Channel" convention — should read "Kari Ramsey / Direct" since Sheet1
+    // has this stay's Channel as 'Direct', not '/ Booking' (that label
+    // belongs to her separate, earlier Booking.com stay, booking 332073).
+    var unit0911 = getApartmenteryUnitForRoom('210');
+    var result0911 = updateApartmenteryBookingCustomerName(unit0911.branchId, unit0911.unitId, '332326', 'Kari Ramsey / Direct');
+    return jsonResponse_(result0911);
+  }
+
   if (action === 'fixKariRamseyWrongInvoice0911') {
     // One-off: Kari Ramsey's PayPal invoice got auto-created against the
     // WRONG Apartmentery booking (332073, her earlier settled Sep1-15 stay)
