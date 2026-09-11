@@ -1312,8 +1312,13 @@ function getInvoiceToCreate_(ss, todayStr) {
     // ด้วยชื่อ + checkin ใกล้เคียง (±3 วัน) ถ้าหาไม่เจอ fallback เป็น roomList ทั้งหมด
     // (กว้างกว่าเดิม แต่ยังดีกว่าเดาผิด)
     const roomList = room.split(',').map(r => r.trim()).filter(Boolean);
+    // Channel === 'Direct' in Sheet1 means the stay is paid via PayPal only
+    // (confirmed by Nathan 2026-09-11) — use that as a disambiguation signal
+    // when a PayPal-sourced invoice has no date to match against and the
+    // guest+room maps to more than one stay (see lookupRoomFromIndex_).
+    const preferChannel = ota.indexOf('PayPal') >= 0 ? 'Direct' : null;
     function findRoomByName(guestName, entryCi) {
-      return lookupRoomFromIndex_(bookingIndex_, guestName, entryCi || '', roomList);
+      return lookupRoomFromIndex_(bookingIndex_, guestName, entryCi || '', roomList, preferChannel);
     }
 
     // Adjustment/Resolution-type entries (e.g. Photography Adjustment) get
@@ -1494,19 +1499,20 @@ function buildBookingLookupIndex_(ss) {
   const data = src.getDataRange().getValues();
   const header = data[0];
   const rows = data.slice(1).filter(r => r.join('').trim() !== '');
-  const idx = indexMap_(header, ['เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์']);
+  const idx = indexMap_(header, ['เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์', 'Channel']);
 
-  const index = {}; // namePart -> [{room, checkin, checkout}]
+  const index = {}; // namePart -> [{room, checkin, checkout, channel}]
   rows.forEach(r => {
     const guest = String(r[idx['ชื่อแขก']] || '').trim();
     const room  = String(r[idx['เลขห้อง']] || '').trim();
     const rn    = roomNum_(room);
     const checkin  = formatCellDate_(r[idx['เช็คอิน']]);
     const checkout = formatCellDate_(r[idx['เช็คเอาท์']]);
+    const channel  = String(r[idx.Channel] || '').trim();
     if (!rn || !checkin) return;
     allNameParts_(guest).forEach(p => {
       if (!index[p]) index[p] = [];
-      index[p].push({ room: rn, checkin, checkout });
+      index[p].push({ room: rn, checkin, checkout, channel });
     });
   });
   return index;
@@ -1525,39 +1531,45 @@ function buildBookingLookupIndex_(ss) {
 // Hotelier email, room resolved correctly, but matchKeys never lined up).
 // Returning the matched checkin/checkout lets the caller backfill the blank
 // invoice dates before building matchKeys, instead of discarding them here.
-function lookupRoomFromIndex_(index, guestName, invoiceCheckin, allowedRoomList) {
+function lookupRoomFromIndex_(index, guestName, invoiceCheckin, allowedRoomList, preferChannel) {
   const parts = allNameParts_(guestName);
   const allowedNums = allowedRoomList.map(roomNum_).filter(Boolean);
 
   // No date to disambiguate by at all (multi-guest total row, or a PayPal
   // row — PayPal payment notifications never carry stay dates). Only safe
   // to auto-resolve the checkin/checkout when this guest+room maps to
-  // exactly ONE known stay. Guessing among several is dangerous: caught
-  // 2026-09-11 — Kari Ramsey had two separate room-210 stays (Sep1-15 and
-  // Sep15-30), auto-pick-first silently attached the PayPal payment's
-  // invoice to the WRONG stay (the already-settled Sep1-15 one) instead of
-  // leaving it for manual review. The room itself is still safe to return
-  // (all candidates agree on it); only the date backfill is withheld when
-  // ambiguous, which keeps the invoice showing "No booking" for manual
-  // confirmation rather than silently mislinking to the wrong stay.
+  // exactly ONE known stay, UNLESS preferChannel narrows it down further —
+  // Nathan confirmed (2026-09-11) that a Sheet1 Channel of 'Direct' means
+  // the stay is paid via PayPal ONLY, so a PayPal-sourced invoice can
+  // confidently pick the 'Direct'-channel stay among same-guest+room
+  // candidates even when there's more than one (e.g. Kari Ramsey had a
+  // Sep1-15 stay on one channel AND a separate Sep15-30 'Direct' stay in
+  // the same room 210 — without this, auto-pick-first grabbed the wrong,
+  // already-settled one instead of the Direct/PayPal one).
   if (!invoiceCheckin) {
-    const byRoom = {}; // room -> Set of "checkin|checkout"
+    const byRoom = {}; // room -> Set of "checkin|checkout|channel"
     parts.forEach(p => {
       (index[p] || []).forEach(c => {
         if (allowedNums.length && allowedNums.indexOf(c.room) === -1) return;
         if (!byRoom[c.room]) byRoom[c.room] = new Set();
-        byRoom[c.room].add(c.checkin + '|' + c.checkout);
+        byRoom[c.room].add(c.checkin + '|' + c.checkout + '|' + (c.channel || ''));
       });
     });
     const rooms = Object.keys(byRoom);
     if (!rooms.length) return null;
     const room = rooms[0];
-    const stays = Array.from(byRoom[room]);
-    if (stays.length === 1) {
-      const [checkin, checkout] = stays[0].split('|');
-      return { room, checkin, checkout };
+    let stays = Array.from(byRoom[room]).map(s => {
+      const [checkin, checkout, channel] = s.split('|');
+      return { checkin, checkout, channel };
+    });
+    if (stays.length > 1 && preferChannel) {
+      const narrowed = stays.filter(s => s.channel === preferChannel);
+      if (narrowed.length === 1) stays = narrowed;
     }
-    return { room, checkin: null, checkout: null }; // ambiguous — room only
+    if (stays.length === 1) {
+      return { room, checkin: stays[0].checkin, checkout: stays[0].checkout };
+    }
+    return { room, checkin: null, checkout: null }; // still ambiguous — room only
   }
 
   let best = null, bestDist = Infinity;
