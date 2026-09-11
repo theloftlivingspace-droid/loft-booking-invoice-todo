@@ -1528,20 +1528,45 @@ function buildBookingLookupIndex_(ss) {
 function lookupRoomFromIndex_(index, guestName, invoiceCheckin, allowedRoomList) {
   const parts = allNameParts_(guestName);
   const allowedNums = allowedRoomList.map(roomNum_).filter(Boolean);
-  let best = null, bestDist = Infinity;
 
+  // No date to disambiguate by at all (multi-guest total row, or a PayPal
+  // row — PayPal payment notifications never carry stay dates). Only safe
+  // to auto-resolve the checkin/checkout when this guest+room maps to
+  // exactly ONE known stay. Guessing among several is dangerous: caught
+  // 2026-09-11 — Kari Ramsey had two separate room-210 stays (Sep1-15 and
+  // Sep15-30), auto-pick-first silently attached the PayPal payment's
+  // invoice to the WRONG stay (the already-settled Sep1-15 one) instead of
+  // leaving it for manual review. The room itself is still safe to return
+  // (all candidates agree on it); only the date backfill is withheld when
+  // ambiguous, which keeps the invoice showing "No booking" for manual
+  // confirmation rather than silently mislinking to the wrong stay.
+  if (!invoiceCheckin) {
+    const byRoom = {}; // room -> Set of "checkin|checkout"
+    parts.forEach(p => {
+      (index[p] || []).forEach(c => {
+        if (allowedNums.length && allowedNums.indexOf(c.room) === -1) return;
+        if (!byRoom[c.room]) byRoom[c.room] = new Set();
+        byRoom[c.room].add(c.checkin + '|' + c.checkout);
+      });
+    });
+    const rooms = Object.keys(byRoom);
+    if (!rooms.length) return null;
+    const room = rooms[0];
+    const stays = Array.from(byRoom[room]);
+    if (stays.length === 1) {
+      const [checkin, checkout] = stays[0].split('|');
+      return { room, checkin, checkout };
+    }
+    return { room, checkin: null, checkout: null }; // ambiguous — room only
+  }
+
+  let best = null, bestDist = Infinity;
   parts.forEach(p => {
     const candidates = index[p] || [];
     candidates.forEach(c => {
       // Only consider rooms that are actually part of this invoice's room list —
       // never assign a room the invoice didn't even mention.
       if (allowedNums.length && allowedNums.indexOf(c.room) === -1) return;
-      // ถ้า invoiceCheckin ว่าง (multi-guest total row, or a PayPal row with no
-      // stay dates at all) → match by name+room only, take the first candidate.
-      if (!invoiceCheckin) {
-        if (best === null) best = c;
-        return;
-      }
       const dist = Math.abs(daysDiff_(invoiceCheckin, c.checkin));
       if (dist <= 3 && dist < bestDist) {
         bestDist = dist;
