@@ -1121,6 +1121,20 @@ function getPendingMatchPayouts_(ss) {
     if (notes.startsWith('↳')) return false;               // matched sub-rows
     if (status.startsWith('✅')) return false;              // already matched
     if (status.startsWith('ยกเลิก')) return false;          // cancelled — not owed, not pending
+    // 'โอนแล้ว (PayPal→SCB)' marks a PayPal source row that matchSCBtoPayPal()
+    // has already folded into a '↳'/summary SCB row pair elsewhere in the
+    // sheet (see payout-income-log's PayPalDirectBooking.gs) — it's done,
+    // just not via the ✅ prefix the other OTAs use, so it isn't caught by
+    // the status.startsWith('✅') check above. Excluded here explicitly
+    // rather than by adding it to PAYOUT_STATUSES_FOR_INVOICE below: that
+    // array also drives which rows getInvoiceToCreate_() treats as
+    // invoice-ready, and this row's NET is the PayPal *gross* amount
+    // (pre-fee) — invoicing off it directly would bill the wrong amount.
+    // The correct net-after-fee amount only exists on the summary row,
+    // which already qualifies via '✅ Matched - PayPal direct booking'.
+    // Found 2026-09-11 (Kari Ramsey / Florian Lintner stuck in Pending
+    // Match indefinitely post-match, despite the summary row already ✅).
+    if (status === 'โอนแล้ว (PayPal→SCB)') return false;
     if (PAYOUT_STATUSES_FOR_INVOICE.includes(status)) return false; // already matched
     return true;
   }).map(r => ({
