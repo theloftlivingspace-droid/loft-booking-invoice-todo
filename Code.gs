@@ -24,6 +24,7 @@ const PAYOUT_STATUSES_FOR_INVOICE = [
   '✅ Matched - Expedia remittance',
   '✅ Matched - Trip.com settlement',
   '✅ Matched - Direct/Extranet',
+  '✅ Matched - PayPal direct booking',
 ];
 
 const PROP_KEY_BOOKING_DONE = 'booking_done_v1';
