@@ -725,6 +725,33 @@ function migrateStrayRootFiles_() {
 function doGet_(e) {
   const action = e && e.parameter && e.parameter.action;
 
+  if (action === 'fixKariRamseyWrongInvoice0911') {
+    // One-off: Kari Ramsey's PayPal invoice got auto-created against the
+    // WRONG Apartmentery booking (332073, her earlier settled Sep1-15 stay)
+    // instead of the correct one (332326, the Sep15-30 Direct/PayPal stay)
+    // — this happened before Nathan's disambiguation fix (commit d469514)
+    // landed. That fix prevents it going forward, but this invoiceKey is
+    // still marked done and still points at the wrong aptBookingId/
+    // invoiceId, so a retry would just skip it as "already done" instead of
+    // creating a correct one. Clears both invoice_done_v1 and
+    // invoice_apt_ids_v1 for this key. Does NOT touch Apartmentery itself —
+    // there's no invoice-delete API here (deleteApartmenteryBooking_ only
+    // works on never-invoiced bookings), so the wrong invoice on 332073
+    // must be voided manually via the Apartmentery UI first. Safe to
+    // re-run.
+    var invoiceKey0911 = 'SCB-2026-09-11-6353.40#PP-20260902-KariRamsey';
+    var doneMap0911 = getProp_(PROP_KEY_INVOICE_DONE);
+    var wasDone0911 = !!doneMap0911[invoiceKey0911];
+    delete doneMap0911[invoiceKey0911];
+    setProp_(PROP_KEY_INVOICE_DONE, doneMap0911);
+    var aptIdsMap0911 = getProp_(PROP_KEY_INVOICE_APT_IDS);
+    var oldAptIds0911 = aptIdsMap0911[invoiceKey0911] || '(none)';
+    delete aptIdsMap0911[invoiceKey0911];
+    setProp_(PROP_KEY_INVOICE_APT_IDS, aptIdsMap0911);
+    return jsonResponse_({ ok: true, invoiceKey: invoiceKey0911, wasDone: wasDone0911, oldAptIds: oldAptIds0911,
+      note: 'Cleared. Next autoCreateApartmenteryInvoicesAndReceipts() run will create a fresh invoice against the correct booking (332326) — but only AFTER the wrong invoice on 332073 is voided manually on Apartmentery, or you will end up with two invoices for the same guest.' });
+  }
+
   if (action === 'getData') {
     return jsonResponse_(getDashboardData());
   }
