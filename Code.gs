@@ -24,6 +24,7 @@ const PAYOUT_STATUSES_FOR_INVOICE = [
   '✅ Matched - Expedia remittance',
   '✅ Matched - Trip.com settlement',
   '✅ Matched - Direct/Extranet',
+  '✅ Matched - PayPal direct booking',
 ];
 
 const PROP_KEY_BOOKING_DONE = 'booking_done_v1';
@@ -724,6 +725,77 @@ function migrateStrayRootFiles_() {
 function doGet_(e) {
   const action = e && e.parameter && e.parameter.action;
 
+  if (action === 'debugFindPayPalInvoiceKeys0911') {
+    // Diagnostic: fixKariRamseyWrongInvoice0911 reset invoiceKey
+    // 'SCB-2026-09-11-6353.40#PP-20260902-KariRamsey' but reported
+    // wasDone:false — meaning that specific key was never actually marked
+    // done, so it isn't what produced the wrong invoice on booking 332073.
+    // Lists every invoice_done_v1/invoice_apt_ids_v1 entry whose key
+    // touches this batch (any key containing 'SCB-2026-09-11-6353.40' or
+    // '332073'), to find the real one.
+    var doneMapD = getProp_(PROP_KEY_INVOICE_DONE);
+    var aptIdsMapD = getProp_(PROP_KEY_INVOICE_APT_IDS);
+    var seenMapD = getProp_(PROP_KEY_INVOICE_SEEN);
+    var hits = [];
+    Object.keys(doneMapD).forEach(function(k) {
+      if (k.indexOf('6353.40') >= 0 || k.indexOf('KariRamsey') >= 0 || k.indexOf('kariramsey') >= 0) {
+        hits.push({ key: k, done: doneMapD[k], aptIds: aptIdsMapD[k] || null, seen: seenMapD[k] || null });
+      }
+    });
+    Object.keys(aptIdsMapD).forEach(function(k) {
+      if ((aptIdsMapD[k]+'').indexOf('332073') >= 0 && hits.every(function(h){return h.key!==k;})) {
+        hits.push({ key: k, done: doneMapD[k] || false, aptIds: aptIdsMapD[k], seen: seenMapD[k] || null });
+      }
+    });
+    return jsonResponse_({ ok: true, hits: hits });
+  }
+
+  if (action === 'checkKariRamseyDirectBookingName0911') {
+    // Read-only check: what does booking 332326's customerName actually say
+    // right now? Confirm before changing anything.
+    var unit0911c = getApartmenteryUnitForRoom('210');
+    var state0911c = _getApartmenteryBookingEditFormState_(unit0911c.branchId, unit0911c.unitId, '332326');
+    return jsonResponse_({ ok: true, bookingId: '332326', customerName: state0911c.customerName,
+      startDate: state0911c.startDate, endDate: state0911c.endDate });
+  }
+
+  if (action === 'fixKariRamseyDirectBookingName0911') {
+    // Fixes booking 332326's customerName to follow the existing "Guest /
+    // Channel" convention — should read "Kari Ramsey / Direct" since Sheet1
+    // has this stay's Channel as 'Direct', not '/ Booking' (that label
+    // belongs to her separate, earlier Booking.com stay, booking 332073).
+    var unit0911 = getApartmenteryUnitForRoom('210');
+    var result0911 = updateApartmenteryBookingCustomerName(unit0911.branchId, unit0911.unitId, '332326', 'Kari Ramsey / Direct');
+    return jsonResponse_(result0911);
+  }
+
+  if (action === 'fixKariRamseyWrongInvoice0911') {
+    // One-off: Kari Ramsey's PayPal invoice got auto-created against the
+    // WRONG Apartmentery booking (332073, her earlier settled Sep1-15 stay)
+    // instead of the correct one (332326, the Sep15-30 Direct/PayPal stay)
+    // — this happened before Nathan's disambiguation fix (commit d469514)
+    // landed. That fix prevents it going forward, but this invoiceKey is
+    // still marked done and still points at the wrong aptBookingId/
+    // invoiceId, so a retry would just skip it as "already done" instead of
+    // creating a correct one. Clears both invoice_done_v1 and
+    // invoice_apt_ids_v1 for this key. Does NOT touch Apartmentery itself —
+    // there's no invoice-delete API here (deleteApartmenteryBooking_ only
+    // works on never-invoiced bookings), so the wrong invoice on 332073
+    // must be voided manually via the Apartmentery UI first. Safe to
+    // re-run.
+    var invoiceKey0911 = 'SCB-2026-09-11-6353.40#PP-20260902-KariRamsey';
+    var doneMap0911 = getProp_(PROP_KEY_INVOICE_DONE);
+    var wasDone0911 = !!doneMap0911[invoiceKey0911];
+    delete doneMap0911[invoiceKey0911];
+    setProp_(PROP_KEY_INVOICE_DONE, doneMap0911);
+    var aptIdsMap0911 = getProp_(PROP_KEY_INVOICE_APT_IDS);
+    var oldAptIds0911 = aptIdsMap0911[invoiceKey0911] || '(none)';
+    delete aptIdsMap0911[invoiceKey0911];
+    setProp_(PROP_KEY_INVOICE_APT_IDS, aptIdsMap0911);
+    return jsonResponse_({ ok: true, invoiceKey: invoiceKey0911, wasDone: wasDone0911, oldAptIds: oldAptIds0911,
+      note: 'Cleared. Next autoCreateApartmenteryInvoicesAndReceipts() run will create a fresh invoice against the correct booking (332326) — but only AFTER the wrong invoice on 332073 is voided manually on Apartmentery, or you will end up with two invoices for the same guest.' });
+  }
+
   if (action === 'getData') {
     return jsonResponse_(getDashboardData());
   }
@@ -1148,6 +1220,20 @@ function getPendingMatchPayouts_(ss) {
     if (notes.startsWith('↳')) return false;               // matched sub-rows
     if (status.startsWith('✅')) return false;              // already matched
     if (status.startsWith('ยกเลิก')) return false;          // cancelled — not owed, not pending
+    // 'โอนแล้ว (PayPal→SCB)' marks a PayPal source row that matchSCBtoPayPal()
+    // has already folded into a '↳'/summary SCB row pair elsewhere in the
+    // sheet (see payout-income-log's PayPalDirectBooking.gs) — it's done,
+    // just not via the ✅ prefix the other OTAs use, so it isn't caught by
+    // the status.startsWith('✅') check above. Excluded here explicitly
+    // rather than by adding it to PAYOUT_STATUSES_FOR_INVOICE below: that
+    // array also drives which rows getInvoiceToCreate_() treats as
+    // invoice-ready, and this row's NET is the PayPal *gross* amount
+    // (pre-fee) — invoicing off it directly would bill the wrong amount.
+    // The correct net-after-fee amount only exists on the summary row,
+    // which already qualifies via '✅ Matched - PayPal direct booking'.
+    // Found 2026-09-11 (Kari Ramsey / Florian Lintner stuck in Pending
+    // Match indefinitely post-match, despite the summary row already ✅).
+    if (status === 'โอนแล้ว (PayPal→SCB)') return false;
     if (PAYOUT_STATUSES_FOR_INVOICE.includes(status)) return false; // already matched
     return true;
   }).map(r => ({
@@ -1339,8 +1425,13 @@ function getInvoiceToCreate_(ss, todayStr) {
     // ด้วยชื่อ + checkin ใกล้เคียง (±3 วัน) ถ้าหาไม่เจอ fallback เป็น roomList ทั้งหมด
     // (กว้างกว่าเดิม แต่ยังดีกว่าเดาผิด)
     const roomList = room.split(',').map(r => r.trim()).filter(Boolean);
+    // Channel === 'Direct' in Sheet1 means the stay is paid via PayPal only
+    // (confirmed by Nathan 2026-09-11) — use that as a disambiguation signal
+    // when a PayPal-sourced invoice has no date to match against and the
+    // guest+room maps to more than one stay (see lookupRoomFromIndex_).
+    const preferChannel = ota.indexOf('PayPal') >= 0 ? 'Direct' : null;
     function findRoomByName(guestName, entryCi) {
-      return lookupRoomFromIndex_(bookingIndex_, guestName, entryCi || '', roomList);
+      return lookupRoomFromIndex_(bookingIndex_, guestName, entryCi || '', roomList, preferChannel);
     }
 
     // Adjustment/Resolution-type entries (e.g. Photography Adjustment) get
@@ -1359,20 +1450,24 @@ function getInvoiceToCreate_(ss, todayStr) {
         if (entries[k].guest === 'Guest') continue;
         const ci_k = (entries[k].ci) ? entries[k].ci : checkin;
         const found_k = findRoomByName(entries[k].guest || firstGuest, ci_k);
-        if (found_k) { batchRoomCandidate = found_k; break; }
+        if (found_k) { batchRoomCandidate = found_k; break; } // {room, checkin, checkout}
       }
     }
+    // Always returns {room, checkin, checkout} — checkin/checkout are null
+    // when we only know the room (manual override, 'Guest' placeholder, or
+    // no Sheet1 match at all), non-null when resolved via findRoomByName so
+    // the caller can backfill a blank invoice checkin (see lookupRoomFromIndex_).
     function findRoomForGuest(guestName, entryCi, entryConfCode) {
       if (entryConfCode && MANUAL_INVOICE_ROOM_OVERRIDES[entryConfCode]) {
-        return MANUAL_INVOICE_ROOM_OVERRIDES[entryConfCode];
+        return { room: MANUAL_INVOICE_ROOM_OVERRIDES[entryConfCode], checkin: null, checkout: null };
       }
       const found = findRoomByName(guestName, entryCi);
       if (found) return found;
-      if (guestName === 'Guest' && batchRoomCandidate) return batchRoomCandidate;
+      if (guestName === 'Guest' && batchRoomCandidate) return { room: batchRoomCandidate.room, checkin: null, checkout: null };
       // หาไม่เจอใน Sheet1 (เช่น booking เก่าที่ถูกลบหลัง checkout) —
       // ห้ามคืน room string รวม (เช่น "363, 203") เพราะจะดู "ลิงค์ผิดห้อง"
       // ให้ flag ชัดเจนว่าไม่ทราบห้องแทน เพื่อให้ผู้ใช้ตรวจมือ
-      return '⚠️ ไม่ทราบห้อง (' + room + ')';
+      return { room: '⚠️ ไม่ทราบห้อง (' + room + ')', checkin: null, checkout: null };
     }
 
     // invoiceKey: ถ้ามีหลาย entries และ conf ซ้ำ ใส่ index กำกับ (#0, #1)
@@ -1408,13 +1503,22 @@ function getInvoiceToCreate_(ss, todayStr) {
       // cancellation payout, conf HMFTY4YTTK, stuck at "ห้อง ?" despite the
       // cancelled booking ABB-e4bdb0e9a1-20260705 being an exact name+date match).
       const roomNeedsLookup = (entries.length > 1 && roomList.length > 1) || !roomNum_(room);
-      const entryRoom = roomNeedsLookup ? findRoomForGuest(entryGuest, entryCheckin, entry.confCode) : room;
+      const lookup = roomNeedsLookup ? findRoomForGuest(entryGuest, entryCheckin, entry.confCode) : { room, checkin: null, checkout: null };
+      const entryRoom = lookup.room;
+      // Backfill a blank stay date from the matched Sheet1 booking (PayPal
+      // direct-booking rows have no dates of their own — see
+      // lookupRoomFromIndex_ header comment) so matchKeys below get a real
+      // date instead of '', which is what let a resolved room still show
+      // "No booking"/never auto-invoice even though Sheet1 had the booking
+      // (Kari Ramsey / Florian Lintner, flagged by Nathan 2026-09-11).
+      const resolvedCheckin  = entryCheckin  || lookup.checkin  || '';
+      const resolvedCheckout = entryCheckout || lookup.checkout || '';
       const aptIdsRaw = aptIdsMap[invoiceKey] || '';
       const aptIdsParts = aptIdsRaw.split(':');
       out.push({
         invoiceKey, bookingId, room: entryRoom,
         guest: entryGuest,
-        checkin: entryCheckin, checkout: entryCheckout, nights: entryNights,
+        checkin: resolvedCheckin, checkout: resolvedCheckout, nights: entryNights,
         net: entries.length > 1 ? entry.net : totalNet,
         isSplitFromMulti: entries.length > 1,
         splitIndex: entries.length > 1 ? (i + 1) : null,
@@ -1424,7 +1528,7 @@ function getInvoiceToCreate_(ss, todayStr) {
         detectedToday: detectedDate === todayStr,
         firstSeen, isNewInList: isNewSeen,
         done: !!doneMap[invoiceKey],
-        matchKeys: makeMatchKeys_(entryGuest, entryCheckin, entryRoom),
+        matchKeys: makeMatchKeys_(entryGuest, resolvedCheckin, entryRoom),
         apartmenteryBookingId: aptIdsParts[0] || '',
         apartmenteryInvoiceId: aptIdsParts[1] || '',
       });
@@ -1508,43 +1612,90 @@ function buildBookingLookupIndex_(ss) {
   const data = src.getDataRange().getValues();
   const header = data[0];
   const rows = data.slice(1).filter(r => r.join('').trim() !== '');
-  const idx = indexMap_(header, ['เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์']);
+  const idx = indexMap_(header, ['เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์', 'Channel']);
 
-  const index = {}; // namePart -> [{room, checkin}]
+  const index = {}; // namePart -> [{room, checkin, checkout, channel}]
   rows.forEach(r => {
     const guest = String(r[idx['ชื่อแขก']] || '').trim();
     const room  = String(r[idx['เลขห้อง']] || '').trim();
     const rn    = roomNum_(room);
-    const checkin = formatCellDate_(r[idx['เช็คอิน']]);
+    const checkin  = formatCellDate_(r[idx['เช็คอิน']]);
+    const checkout = formatCellDate_(r[idx['เช็คเอาท์']]);
+    const channel  = String(r[idx.Channel] || '').trim();
     if (!rn || !checkin) return;
     allNameParts_(guest).forEach(p => {
       if (!index[p]) index[p] = [];
-      index[p].push({ room: rn, checkin });
+      index[p].push({ room: rn, checkin, checkout, channel });
     });
   });
   return index;
 }
 
-function lookupRoomFromIndex_(index, guestName, invoiceCheckin, allowedRoomList) {
+// Returns {room, checkin, checkout} of the best-matching Sheet1 booking, or
+// null if none found. Used to be room-only — but PayPal direct-booking rows
+// (see getInvoiceToCreate_) have no checkin date of their own (PayPal doesn't
+// report stay dates), which left entryCheckin '' even after the room was
+// correctly resolved here by name. makeMatchKeys_() bakes checkin into every
+// key ('n:name|date', 'cr:date|room'), so an empty date can never intersect
+// the booking's real dated keys — the invoice permanently shows "No booking"
+// in the-loft-admin and autoCreateApartmenteryInvoicesAndReceipts() skips it
+// forever, even though the Sheet1 row exists (confirmed by Nathan 2026-09-11,
+// Kari Ramsey/Florian Lintner — booking was added from the original Little
+// Hotelier email, room resolved correctly, but matchKeys never lined up).
+// Returning the matched checkin/checkout lets the caller backfill the blank
+// invoice dates before building matchKeys, instead of discarding them here.
+function lookupRoomFromIndex_(index, guestName, invoiceCheckin, allowedRoomList, preferChannel) {
   const parts = allNameParts_(guestName);
   const allowedNums = allowedRoomList.map(roomNum_).filter(Boolean);
-  let best = null, bestDist = Infinity;
 
+  // No date to disambiguate by at all (multi-guest total row, or a PayPal
+  // row — PayPal payment notifications never carry stay dates). Only safe
+  // to auto-resolve the checkin/checkout when this guest+room maps to
+  // exactly ONE known stay, UNLESS preferChannel narrows it down further —
+  // Nathan confirmed (2026-09-11) that a Sheet1 Channel of 'Direct' means
+  // the stay is paid via PayPal ONLY, so a PayPal-sourced invoice can
+  // confidently pick the 'Direct'-channel stay among same-guest+room
+  // candidates even when there's more than one (e.g. Kari Ramsey had a
+  // Sep1-15 stay on one channel AND a separate Sep15-30 'Direct' stay in
+  // the same room 210 — without this, auto-pick-first grabbed the wrong,
+  // already-settled one instead of the Direct/PayPal one).
+  if (!invoiceCheckin) {
+    const byRoom = {}; // room -> Set of "checkin|checkout|channel"
+    parts.forEach(p => {
+      (index[p] || []).forEach(c => {
+        if (allowedNums.length && allowedNums.indexOf(c.room) === -1) return;
+        if (!byRoom[c.room]) byRoom[c.room] = new Set();
+        byRoom[c.room].add(c.checkin + '|' + c.checkout + '|' + (c.channel || ''));
+      });
+    });
+    const rooms = Object.keys(byRoom);
+    if (!rooms.length) return null;
+    const room = rooms[0];
+    let stays = Array.from(byRoom[room]).map(s => {
+      const [checkin, checkout, channel] = s.split('|');
+      return { checkin, checkout, channel };
+    });
+    if (stays.length > 1 && preferChannel) {
+      const narrowed = stays.filter(s => s.channel === preferChannel);
+      if (narrowed.length === 1) stays = narrowed;
+    }
+    if (stays.length === 1) {
+      return { room, checkin: stays[0].checkin, checkout: stays[0].checkout };
+    }
+    return { room, checkin: null, checkout: null }; // still ambiguous — room only
+  }
+
+  let best = null, bestDist = Infinity;
   parts.forEach(p => {
     const candidates = index[p] || [];
     candidates.forEach(c => {
       // Only consider rooms that are actually part of this invoice's room list —
       // never assign a room the invoice didn't even mention.
       if (allowedNums.length && allowedNums.indexOf(c.room) === -1) return;
-      // ถ้า invoiceCheckin ว่าง (multi-guest total row) → match by name+room only
-      if (!invoiceCheckin) {
-        if (best === null) best = c.room;
-        return;
-      }
       const dist = Math.abs(daysDiff_(invoiceCheckin, c.checkin));
       if (dist <= 3 && dist < bestDist) {
         bestDist = dist;
-        best = c.room;
+        best = c;
       }
     });
   });
