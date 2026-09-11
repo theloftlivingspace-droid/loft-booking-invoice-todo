@@ -750,6 +750,24 @@ function doGet_(e) {
     return jsonResponse_({ ok: true, hits: hits });
   }
 
+  if (action === 'compareKariRamseyCustomerIds0911') {
+    // customerName came back blank for 332326, but the booking-list view
+    // shows "Kari Ramsey / Booking" — so the label is coming from a linked
+    // CUSTOMER record (customerType='existing' + customerId), not the
+    // booking's own customerName field. Need to know whether 332073 (her
+    // Booking.com stay) and 332326 (this Direct stay) share the SAME
+    // customerId before touching anything — if shared, renaming the
+    // customer record would wrongly relabel 332073 too.
+    var unit0911cmp = getApartmenteryUnitForRoom('210');
+    var s332073 = _getApartmenteryBookingEditFormState_(unit0911cmp.branchId, unit0911cmp.unitId, '332073');
+    var s332326 = _getApartmenteryBookingEditFormState_(unit0911cmp.branchId, unit0911cmp.unitId, '332326');
+    return jsonResponse_({ ok: true,
+      b332073: { customerType: s332073.customerType, customerId: s332073.customerId, customerName: s332073.customerName },
+      b332326: { customerType: s332326.customerType, customerId: s332326.customerId, customerName: s332326.customerName },
+      sameCustomer: s332073.customerId === s332326.customerId && !!s332073.customerId
+    });
+  }
+
   if (action === 'checkKariRamseyDirectBookingName0911') {
     // Read-only check: what does booking 332326's customerName actually say
     // right now? Confirm before changing anything.
