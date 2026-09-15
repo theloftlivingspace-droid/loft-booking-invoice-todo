@@ -40,6 +40,19 @@ const PROP_KEY_INVOICE_APT_IDS = 'invoice_apt_ids_v1';
 // handle on its own, e.g. a placeholder-guest adjustment with no other
 // resolvable entry in the same batch to pick a room from. Empty by default.
 const MANUAL_INVOICE_ROOM_OVERRIDES = {
+  // Jade Salazar stay 2 (2026-08-30 → 08-31, early checkout from a
+  // 2-night booking). findRoomByName()'s Sheet1 lookup kept losing to a
+  // false-positive cr: (date+room) match against unrelated bookings
+  // (Jeff Sun checking into 204 same day; Supa Rungrueangsorakarn
+  // checking out of 205 same day) even though Sheet1 already has the
+  // correct row (resId ABB-jadesalaza-20260830, room 203 Allure).
+  // Confirmed with Nathan 2026-09-15: guest actually stayed in 203.
+  // (Separately: the real Apartmentery booking behind this invoice,
+  // 331831, was mistakenly created under room 205's unit — left as-is
+  // since it's already invoiced/paid and apartmentery's edit form has no
+  // way to move a booking's unit; this override only fixes what the
+  // dashboard *displays* as the room, not the Apartmentery record.)
+  'HMC8M2YBBY': '203',
 };
 
 /* ============================================================
