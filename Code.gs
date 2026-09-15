@@ -1045,6 +1045,40 @@ function doGet_(e) {
     return jsonResponse_(fixDuplicateInvoiceKirillBogdanov20260820());
   }
 
+  if (action === 'findBooking331831Diag0915') {
+    // Tap-to-run mobile link for findBooking331831Location20260915()
+    // (FindBooking331831Location20260915.gs) — same read-only scan, just
+    // returns JSON instead of Logger output so it's readable from a phone
+    // browser with no Apps Script editor UI involved. GET only, no writes.
+    var results0915 = [];
+    var found0915 = false;
+    Object.keys(ROOM_TO_UNIT_ID).forEach(function (roomNum) {
+      var unitId = ROOM_TO_UNIT_ID[roomNum];
+      var path = '/user/branch/' + APARTMENTERY_BRANCH_ID + '/unit/' + unitId + '/booking/331831/edit';
+      var response;
+      try {
+        response = _apartmenteryFetch_(path, { method: 'get' });
+      } catch (err) {
+        results0915.push({ room: roomNum, unitId: unitId, error: String(err.message || err) });
+        return;
+      }
+      var code = response.getResponseCode();
+      if (code === 200) {
+        found0915 = true;
+        var html = response.getContentText();
+        results0915.push({
+          room: roomNum, unitId: unitId, httpCode: code,
+          customerName: _extractInputValue_(html, 'customerName'),
+          startDate: _extractInputValue_(html, 'startDate'),
+          endDate: _extractInputValue_(html, 'endDate')
+        });
+      } else {
+        results0915.push({ room: roomNum, unitId: unitId, httpCode: code });
+      }
+    });
+    return jsonResponse_({ ok: true, bookingId: '331831', found: found0915, results: results0915 });
+  }
+
   // Default: serve HTML webapp
   const template = HtmlService.createTemplateFromFile('Index');
   return template.evaluate()
