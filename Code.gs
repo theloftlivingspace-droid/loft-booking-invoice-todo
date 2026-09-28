@@ -1805,13 +1805,21 @@ function allNameParts_(raw) {
   // (เช่น "Глеп Бабич") ถูก strip จนเหลือ '' ทุกคำ ทำให้ allNameParts_ คืน []
   // และ lookupRoomFromIndex_ หา match ไม่เจอเลย → flag เป็น "ไม่ทราบห้อง" เสมอ
   // แม้ booking จะมีอยู่จริงใน Sheet1 ก็ตาม — bug พบ 2026-09-02 (Глеп Бабич)
-  return raw.split(/[\s,\/\\]+/)
+  const CJK = /[\u4e00-\u9fff\u3400-\u4dbf]/;
+  const tokens = raw.split(/[\s,\/\\]+/)
     .map(p => p.toLowerCase().replace(/[^a-z0-9ก-๙\u0400-\u04ff\u4e00-\u9fff\u3400-\u4dbf]/g, ''))
-    .filter(p => {
-      if (!p) return false;
-      const isCjk = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(p);
-      return isCjk ? p.length >= 2 : p.length >= 3;
+    .filter(Boolean);
+  const parts = tokens.filter(p => CJK.test(p) ? p.length >= 2 : p.length >= 3);
+  // ชื่อจีน/ญี่ปุ่นที่คั่นด้วยช่องว่างทีละตัว (เช่น "苗 何") แตกเป็น token ยาว 1 ตัวอักษร
+  // ซึ่งถูก filter ≥2 ทิ้งหมด → allNameParts_ คืน [] → "ไม่ทราบห้อง" (bug พบ 2026-09-28, 苗 何 / 204)
+  // แก้: รวม token CJK ล้วนเข้าด้วยกันเป็นชื่อเดียว (ทั้งลำดับปกติและกลับด้าน กันชื่อ-นามสกุลสลับ)
+  const cjkTokens = tokens.filter(p => /^[\u4e00-\u9fff\u3400-\u4dbf]+$/.test(p));
+  if (cjkTokens.length >= 2) {
+    [cjkTokens.join(''), cjkTokens.slice().reverse().join('')].forEach(j => {
+      if (j.length >= 2 && parts.indexOf(j) === -1) parts.push(j);
     });
+  }
+  return parts;
 }
 
 function roomNum_(room) {
