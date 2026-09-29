@@ -1299,6 +1299,7 @@ function getPendingMatchPayouts_(ss) {
     // Found 2026-09-11 (Kari Ramsey / Florian Lintner stuck in Pending
     // Match indefinitely post-match, despite the summary row already ✅).
     if (status === 'โอนแล้ว (PayPal→SCB)') return false;
+    if (status.startsWith('ซ้ำ')) return false;   // duplicate PayPal row retired by matchSCBtoPayPal()
     if (PAYOUT_STATUSES_FOR_INVOICE.includes(status)) return false; // already matched
     return true;
   }).map(r => ({
