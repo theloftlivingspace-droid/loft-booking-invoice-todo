@@ -2167,7 +2167,7 @@ function triggerStyleSheet1_() {
   // setValue() in setApartmenteryBookingId_, so nothing else ever repaints
   // it until styleSheet1() actually runs again). 3 attempts with backoff;
   // only truly gives up — loudly — if all 3 fail.
-  var PAYOUT_GAS_URL = 'https://script.google.com/macros/s/AKfycbxwlKBtlw74Z52ryAK2SNV_3mNXhFzk3IoANSOqNBhfENUdO3QhfQUKovZ6_THXfeE/exec';
+  var PAYOUT_GAS_URL = 'https://script.google.com/macros/s/AKfycbxATx-qQyGBbDYhL--m7wid6PhNGecvDzAEt_9rVdix_xKZO1N3JePp7wOsbElDu0s/exec';
   var MAX_ATTEMPTS = 3;
   var BACKOFF_MS = [1000, 3000]; // between attempt 1→2 and 2→3
 
