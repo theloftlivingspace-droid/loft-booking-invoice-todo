@@ -872,8 +872,10 @@ function doGet_(e) {
   if (action === 'setNote') {
     const id   = e.parameter.id   || '';
     const note = e.parameter.note || '';
+    // setBookingNote() already calls triggerStyleSheet1_() on success — a second
+    // call here doubled the (blocking, ScriptLock-guarded) styleSheet1 POST and
+    // pushed setNote past the admin proxy's ~22s timeout.
     const result = setBookingNote(id, note);
-    triggerStyleSheet1_();
     invalidateDashboardCache_();
     return jsonResponse_(result);
   }
