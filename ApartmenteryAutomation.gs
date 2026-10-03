@@ -455,7 +455,11 @@ function autoCreateApartmenteryBookings() {
         const newEndDate = _dateMinusOneDay_(b.checkin);
         Logger.log(`same-day turnover: shrinking ${outgoingResId} (${b.room}) apartmentery ` +
           `bookingId ${outgoingAptId} endDate to ${newEndDate} before creating ${b.resId}`);
-        updateApartmenteryBookingEndDateForRoom(b.room, outgoingAptId, newEndDate);
+        const shrinkRes = updateApartmenteryBookingEndDateForRoom(b.room, outgoingAptId, newEndDate);
+        if (shrinkRes && shrinkRes.skipped) {
+          Logger.log(`same-day turnover: shrink of ${outgoingResId} skipped — ${shrinkRes.reason}. ` +
+            `Continuing; phantom-date dodge handles this overlap.`);
+        }
         // Mimic a browser reloading the calendar view between the shrink
         // and the add — see refreshApartmenteryUnitCalendarForRoom's
         // comment in ApartmenteryClient.gs for why.
@@ -1431,7 +1435,11 @@ function backfillMissingApartmenteryBookings() {
       try {
         const newEndDate = _dateMinusOneDay_(b.checkin);
         Logger.log(`same-day turnover: shrinking ${outgoingResId} (${b.room}) apartmentery bookingId ${outgoingAptId} endDate to ${newEndDate} before creating ${b.resId}`);
-        updateApartmenteryBookingEndDateForRoom(b.room, outgoingAptId, newEndDate);
+        const shrinkRes = updateApartmenteryBookingEndDateForRoom(b.room, outgoingAptId, newEndDate);
+        if (shrinkRes && shrinkRes.skipped) {
+          Logger.log(`same-day turnover: shrink of ${outgoingResId} skipped — ${shrinkRes.reason}. ` +
+            `Continuing; phantom-date dodge handles this overlap.`);
+        }
         refreshApartmenteryUnitCalendarForRoom(b.room);
       } catch (err) {
         if (isApartmenterySessionExpiredError(err)) {

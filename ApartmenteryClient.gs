@@ -663,6 +663,19 @@ function updateApartmenteryBookingCustomerName(branchId, unitId, bookingId, newC
 function updateApartmenteryBookingEndDate(branchId, unitId, bookingId, newEndDate) {
   const state = _getApartmenteryBookingEditFormState_(branchId, unitId, bookingId);
 
+  // Guard: apartmentery answers HTTP 400 when endDate < startDate. This happens
+  // for a booking cancelled before arrival (kept as a 1-night anchor at its
+  // check-in date, see cancelBooking_) when a same-day-turnover shrink asks for
+  // checkin-1. Nothing can be shrunk there, so skip with a clear reason instead
+  // of a blind POST — callers already handle { skipped: true }.
+  if (state.startDate && newEndDate < state.startDate) {
+    return {
+      skipped: true,
+      reason: `Booking ${bookingId}: newEndDate ${newEndDate} is before its startDate ` +
+              `${state.startDate} (cancelled-before-arrival anchor?) — nothing to shrink.`
+    };
+  }
+
   const path = `/user/branch/${branchId}/unit/${unitId}/booking/${bookingId}/edit`;
   const payload = {
     startDate: state.startDate,
