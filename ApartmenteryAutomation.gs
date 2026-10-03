@@ -104,8 +104,12 @@ function _datePlusOneDay_(dateStr) {
 function _buildCancelledPhantomDatesByRoom_(items) {
   const byRoom = {};
   items.forEach(function (x) {
-    if (!/ยกเลิก|cancel/i.test(x.room)) return;
-    if (!x.checkin || !x.checkout || x.checkin !== x.checkout) return; // mid-stay cancel — real occupancy, skip
+    // Any 0-night row (checkin===checkout) with a real apartmentery booking is a
+    // phantom day — whether or not the room cell has been marked ยกเลิก yet.
+    // (Previously required the marker, so a not-yet-marked row was mistaken for
+    // a normal outgoing guest and an impossible endDate<startDate shrink was sent.)
+    // Mid-stay cancels have checkin!==checkout — real occupancy, skipped here.
+    if (!x.checkin || !x.checkout || x.checkin !== x.checkout) return;
     // Only counts as a real apartmentery-side blocker if a booking was
     // actually created there in the first place. Found 2026-08-23:
     // Marouane Boumaiz's cancelled row (203, 16 Aug) has an empty
@@ -417,6 +421,11 @@ function autoCreateApartmenteryBookings() {
   items.forEach(x => {
     if (/ยกเลิก|cancel/i.test(x.room)) return; // cancelled stays don't occupy the room
     if (!x.checkout) return;
+    // 0-night row (checkin===checkout): nothing to shrink and not a real
+    // outgoing/incoming stay — treated as a phantom day instead (see
+    // _buildCancelledPhantomDatesByRoom_). Covers a cancelled-before-arrival row
+    // not yet marked ยกเลิก (found 2026-10-04: Wesley Thor / 103 / bookingId 331448).
+    if (x.checkin && x.checkin === x.checkout) return;
     const rn = roomNum_(x.room);
     if (!outgoingByRoom[rn]) outgoingByRoom[rn] = {};
     outgoingByRoom[rn][x.checkout] = x.resId;
@@ -1400,6 +1409,7 @@ function backfillMissingApartmenteryBookings() {
   items.forEach(x => {
     if (/ยกเลิก|cancel/i.test(x.room)) return;
     if (!x.checkout) return;
+    if (x.checkin && x.checkin === x.checkout) return; // 0-night phantom, see autoCreateApartmenteryBookings
     const rn = roomNum_(x.room);
     if (!outgoingByRoom[rn]) outgoingByRoom[rn] = {};
     outgoingByRoom[rn][x.checkout] = x.resId;

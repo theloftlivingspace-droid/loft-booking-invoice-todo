@@ -407,7 +407,8 @@ function _getCancelledPhantomDatesForRoom_(targetRoomNum) {
   if (idx['เลขห้อง'] < 0) return set;
   for (let i = 1; i < data.length; i++) {
     const room = String(data[i][idx['เลขห้อง']] || '').trim();
-    if (!/ยกเลิก|cancel/i.test(room)) continue;
+    // 0-night rows count whether or not already marked ยกเลิก (see
+    // _buildCancelledPhantomDatesByRoom_); the ci===co check below filters them.
     if (roomNum_(room) !== targetRoomNum) continue;
     // A cancelled row only actually occupies a day on apartmentery's
     // calendar if an apartmentery booking was ever created for it in the
