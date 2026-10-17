@@ -1329,7 +1329,7 @@ function getBookingToAdd_(ss, todayStr) {
   const header = data[0];
   const rows = data.slice(1).filter(r => r.join('').trim() !== '');
 
-  const idx = indexMap_(header, ['เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์', 'Channel', 'ResId', 'Note', 'Apartmentery Booking ID']);
+  const idx = indexMap_(header, ['เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์', 'Channel', 'ResId', 'Note', 'Apartmentery Booking ID', 'Adults', 'Children', 'Guests']);
 
   const doneMap = getProp_(PROP_KEY_BOOKING_DONE);
   const seenMap = getProp_(PROP_KEY_BOOKING_SEEN);
@@ -1349,10 +1349,12 @@ function getBookingToAdd_(ss, todayStr) {
       seenChanged = true; isNewToday = true;
     }
 
+    const gc = guestCountsFromRow_(r, idx);
     return {
       resId, room, guest, checkin,
       checkout: formatCellDate_(r[idx['เช็คเอาท์']]),
       channel,
+      adults: gc.adults, children: gc.children, guests: gc.guests,
       note: String(r[idx.Note] || ''),
       firstSeen, isNewToday,
       done: !!doneMap[resId],
@@ -1636,13 +1638,17 @@ function getRoomStatus_() {
   const data = src.getDataRange().getValues();
   const header = data[0];
   const rows = data.slice(1).filter(r => r.join('').trim() !== '');
-  const idx = indexMap_(header, ['เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์', 'Channel', 'ResId', 'Note']);
+  const idx = indexMap_(header, ['เลขห้อง', 'ชื่อแขก', 'เช็คอิน', 'เช็คเอาท์', 'Channel', 'ResId', 'Note', 'Adults', 'Children', 'Guests']);
   const statusMap = getCheckStatusMap_(ss); // reuse the already-open spreadsheet — avoid a 2nd openById
 
   const stays = rows.map(r => {
     const resId = String(r[idx.ResId] || '').trim();
     const st = statusMap[resId] || {};
+    const gc = guestCountsFromRow_(r, idx);
     return {
+      adults:       gc.adults,
+      children:     gc.children,
+      guests:       gc.guests,
       room:         String(r[idx['เลขห้อง']] || '').trim(),
       guest:        String(r[idx['ชื่อแขก']] || '').trim(),
       checkin:      formatCellDate_(r[idx['เช็คอิน']]),
@@ -2231,6 +2237,31 @@ function indexMap_(header, keys) {
   const map = {};
   keys.forEach(k => { map[k] = header.indexOf(k); });
   return map;
+}
+
+/**
+ * จำนวนแขกจากแถว Sheet1 (คอลัมน์ Adults / Children / Guests ที่ hotel-line-bot เขียน)
+ * คืน { adults, children, guests } — ทั้งสามเป็น null ถ้าไม่มีข้อมูล (UI แสดง "ไม่ระบุ")
+ * ถ้าแอดมินกรอกเฉพาะ Guests (รวม) เอง ใช้ยอดรวมนั้น และ adults/children เป็น 0
+ */
+function guestCountsFromRow_(r, idx) {
+  function n(i) {
+    if (i === undefined || i === null || i < 0) return null;
+    const v = parseInt(String(r[i] === undefined || r[i] === null ? '' : r[i]).trim(), 10);
+    return isNaN(v) ? null : v;
+  }
+  const a = n(idx.Adults), c = n(idx.Children), t = n(idx.Guests);
+  if (a === null && c === null && t === null) return { adults: null, children: null, guests: null };
+  const adults = a === null ? 0 : a, children = c === null ? 0 : c;
+  return { adults: adults, children: children, guests: (t !== null && t > 0) ? t : adults + children };
+}
+
+/** ข้อความจำนวนแขกสำหรับโน้ต: "3 ท่าน (ผู้ใหญ่ 2 / เด็ก 1)" | "2 ท่าน" | '' ถ้าไม่ทราบ */
+function guestsLabel_(b) {
+  if (!b || !b.guests) return '';
+  if (b.children > 0 && b.adults > 0) return b.guests + ' ท่าน (ผู้ใหญ่ ' + b.adults + ' / เด็ก ' + b.children + ')';
+  if (b.children > 0) return b.guests + ' ท่าน (เด็ก ' + b.children + ')';
+  return b.guests + ' ท่าน';
 }
 
 function formatCellDate_(val) {

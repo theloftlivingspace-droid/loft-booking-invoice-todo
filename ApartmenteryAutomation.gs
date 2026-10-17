@@ -530,7 +530,7 @@ function autoCreateApartmenteryBookings() {
         startDate: effectiveStartDate,
         endDate: effectiveEndDate,
         guestName: guestNameWithChannel,
-        note: (`${b.channel} ${b.resId}`.trim() + (dodgeNote ? ` | ${dodgeNote}` : '')).trim()
+        note: (`${b.channel} ${b.resId}`.trim() + (guestsLabel_(b) ? ` | แขก ${guestsLabel_(b)}` : '') + (dodgeNote ? ` | ${dodgeNote}` : '')).trim()
       });
 
       if (created && created.skipped) {
@@ -1498,7 +1498,7 @@ function backfillMissingApartmenteryBookings() {
         startDate: effectiveStartDate,
         endDate: effectiveEndDate,
         guestName: guestNameWithChannel,
-        note: (`${b.channel} ${b.resId}`.trim() + (dodgeNote ? ` | ${dodgeNote}` : '')).trim()
+        note: (`${b.channel} ${b.resId}`.trim() + (guestsLabel_(b) ? ` | แขก ${guestsLabel_(b)}` : '') + (dodgeNote ? ` | ${dodgeNote}` : '')).trim()
       });
 
       if (created && created.skipped) {
