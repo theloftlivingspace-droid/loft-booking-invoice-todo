@@ -185,7 +185,7 @@ function uploadDoc_(body) {
   try {
     getOrCreateDocsSheet_().appendRow([resId, room, checkin, fileId, fileName, mimeType, uploadedAt]);
   } catch (e) { /* non-fatal */ }
-  invalidateAllDocsCache_();
+  allDocsCacheAdd_(folder.getName(), fileToDocFile_(file));
 
   return {
     ok: true,
@@ -216,50 +216,116 @@ function deleteDoc_(body) {
       if (data[i][3] === fileId) { sheet.deleteRow(i + 1); break; }
     }
   } catch (e) { /* non-fatal */ }
-  invalidateAllDocsCache_();
+  allDocsCacheRemove_(fileId);
 
   return { ok: true };
 }
 
-function getAllDocs_() {
-  // getAllDocs_ used to do a fresh full scan of every booking-doc subfolder
-  // (and every file inside each) on EVERY call. That's O(all bookings ever
-  // made) and only gets slower as the business accumulates history — a big
-  // enough tree can blow past GAS's execution limit or the Vercel proxy's
-  // timeout, which the client silently swallows as "no docs" (see
-  // refreshDocs() in CheckInOut.tsx) instead of a visible error. A short
-  // cache means only one caller per window pays for the full scan.
-  const cache = CacheService.getScriptCache();
-  const cacheKey = 'allDocs_v1';
-  const cached = cache.get(cacheKey);
-  if (cached) return JSON.parse(cached);
+// ---------------------------------------------------------------------------
+// All-docs index cache.
+//
+// Why the old 60s CacheService entry never helped:
+//   1) 60s is shorter than the gap between visits, so almost every call was a
+//      cold full-Drive scan (O(all bookings ever made) Drive calls).
+//   2) The whole JSON went into ONE cache key, and CacheService silently
+//      rejects values >100KB — once the doc index grew past that, nothing was
+//      ever cached at all.
+// Now: chunked cache (each chunk well under 100KB), 6h TTL (the CacheService
+// max), patched in place on upload/delete, and re-warmed hourly by a trigger
+// (AllDocsWarmTrigger.gs) so a user-facing request is almost never cold.
+// ---------------------------------------------------------------------------
+const ALLDOCS_CACHE_KEY = 'allDocs_v2';
+const ALLDOCS_CACHE_TTL = 6 * 60 * 60; // seconds — CacheService max
+const ALLDOCS_CHUNK_CHARS = 30000;     // <=~90KB even if every char is 3-byte UTF-8 (Thai names)
 
-  const root = getDocsRootFolder_();
-  const subfolders = root.getFolders();
-  const docs = {}; // "{room}_{checkin}_{resId}" -> DocFile[]  (matches folderKey() in CheckInOut.tsx)
-
-  while (subfolders.hasNext()) {
-    const sub = subfolders.next();
-    const key = sub.getName();
-    const files = sub.getFiles();
-    const list = [];
-    while (files.hasNext()) {
-      list.push(fileToDocFile_(files.next()));
-    }
-    if (list.length) docs[key] = list;
-  }
-
-  const result = { ok: true, docs: docs };
+function readAllDocsCache_() {
   try {
-    cache.put(cacheKey, JSON.stringify(result), 60);
-  } catch (e) {
-    // Response too large for CacheService (100KB/key) — fine, just skip caching.
-  }
-  return result;
+    const cache = CacheService.getScriptCache();
+    const n = parseInt(cache.get(ALLDOCS_CACHE_KEY + ':n') || '', 10);
+    if (!n) return null;
+    const keys = [];
+    for (let i = 0; i < n; i++) keys.push(ALLDOCS_CACHE_KEY + ':' + i);
+    const got = cache.getAll(keys);
+    let str = '';
+    for (const k of keys) {
+      if (got[k] == null) return null; // a chunk expired/evicted → treat as miss
+      str += got[k];
+    }
+    return JSON.parse(str);
+  } catch (e) { return null; }
+}
+
+function writeAllDocsCache_(result) {
+  try {
+    const str = JSON.stringify(result);
+    const n = Math.ceil(str.length / ALLDOCS_CHUNK_CHARS);
+    const entries = {};
+    for (let i = 0; i < n; i++) {
+      entries[ALLDOCS_CACHE_KEY + ':' + i] = str.substr(i * ALLDOCS_CHUNK_CHARS, ALLDOCS_CHUNK_CHARS);
+    }
+    entries[ALLDOCS_CACHE_KEY + ':n'] = String(n);
+    CacheService.getScriptCache().putAll(entries, ALLDOCS_CACHE_TTL);
+  } catch (e) { /* best-effort — next call just scans again */ }
 }
 
 function invalidateAllDocsCache_() {
-  try { CacheService.getScriptCache().remove('allDocs_v1'); } catch (e) { /* best-effort */ }
+  try {
+    const cache = CacheService.getScriptCache();
+    const n = parseInt(cache.get(ALLDOCS_CACHE_KEY + ':n') || '0', 10) || 0;
+    const keys = [ALLDOCS_CACHE_KEY + ':n', 'allDocs_v1'];
+    for (let i = 0; i < n; i++) keys.push(ALLDOCS_CACHE_KEY + ':' + i);
+    cache.removeAll(keys);
+  } catch (e) { /* best-effort */ }
+}
+
+// Keep the cached index correct after an upload/delete WITHOUT discarding it
+// (discarding would make the very next page load pay for a full cold scan).
+function allDocsCacheAdd_(folderKey, docFile) {
+  try {
+    const c = readAllDocsCache_();
+    if (!c || !c.docs) return; // nothing cached — next scan/warm run will include it
+    (c.docs[folderKey] = c.docs[folderKey] || []).push(docFile);
+    writeAllDocsCache_(c);
+  } catch (e) { invalidateAllDocsCache_(); }
+}
+
+function allDocsCacheRemove_(fileId) {
+  try {
+    const c = readAllDocsCache_();
+    if (!c || !c.docs) return;
+    Object.keys(c.docs).forEach(function (k) {
+      c.docs[k] = c.docs[k].filter(function (d) { return d.fileId !== fileId; });
+      if (!c.docs[k].length) delete c.docs[k];
+    });
+    writeAllDocsCache_(c);
+  } catch (e) { invalidateAllDocsCache_(); }
+}
+
+function scanAllDocs_() {
+  const root = getDocsRootFolder_();
+  const subfolders = root.getFolders();
+  const docs = {}; // "{room}_{checkin}_{resId}" -> DocFile[]  (matches folderKey() in CheckInOut.tsx)
+  while (subfolders.hasNext()) {
+    const sub = subfolders.next();
+    const files = sub.getFiles();
+    const list = [];
+    while (files.hasNext()) list.push(fileToDocFile_(files.next()));
+    if (list.length) docs[sub.getName()] = list;
+  }
+  return { ok: true, docs: docs };
+}
+
+function getAllDocs_() {
+  const cached = readAllDocsCache_();
+  if (cached) return cached;
+  const result = scanAllDocs_();
+  writeAllDocsCache_(result);
+  return result;
+}
+
+// Run by the hourly trigger (see AllDocsWarmTrigger.gs) so users rarely hit a cold scan.
+function warmAllDocsCache_() {
+  writeAllDocsCache_(scanAllDocs_());
 }
 
 /* ============================================================
