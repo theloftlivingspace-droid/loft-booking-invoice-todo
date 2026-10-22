@@ -670,7 +670,18 @@ function updateCheckoutDate_(body) {
   }
   if (rowIdx === -1) return { ok: false, error: 'resId not found: ' + resId };
   if (/ยกเลิก|cancel/i.test(room)) return { ok: false, error: 'booking is cancelled' };
-  if (newCheckout === oldCheckout) return { ok: false, error: 'newCheckout is the same as current checkout' };
+  if (newCheckout === oldCheckout) {
+    // Idempotent retry: a previous attempt may have written the sheet but timed
+    // out on the client/proxy side (Apartmentery sync is slow), so the UI never
+    // saw success. Don't error — re-run the (idempotent) Apartmentery sync so a
+    // cut-off sync gets finished, and report success.
+    const syncAgain = syncApartmenteryCheckoutDate_(resId, room, guest, checkin, newCheckout);
+    invalidateRoomStatusCache_();
+    return Object.assign({
+      ok: true, alreadyApplied: true, resId: resId, room: room, guest: guest, checkin: checkin,
+      oldCheckout: oldCheckout, newCheckout: newCheckout
+    }, syncAgain);
+  }
 
   // Conflict check — only matters when extending: another booking on the
   // same room could already start somewhere inside [oldCheckout, newCheckout).
