@@ -75,6 +75,7 @@ function doGet(e) {
  *  POST entry point — used for binary/file uploads
  *  POST body (JSON): { action: 'uploadDoc', room, checkin, resId, fileName, mimeType, base64Data }
  *  POST body (JSON): { action: 'deleteDoc', fileId }
+ *  POST body (JSON): { action: 'updateCheckin', resId, newCheckin: 'YYYY-MM-DD' }
  *  GET  ?action=getAllDocs    → JSON map of resId -> DocFile[]
  * ============================================================ */
 function doPost(e) {
@@ -96,6 +97,9 @@ function doPost(e) {
     }
     if (action === 'updateCheckout') {
       return jsonResponse_(updateCheckoutDate_(body));
+    }
+    if (action === 'updateCheckin') {
+      return jsonResponse_(updateCheckinDate_(body));
     }
     if (action === 'moveGuestRoom') {
       return jsonResponse_(moveGuestRoom_(body));
@@ -718,6 +722,101 @@ function updateCheckoutDate_(body) {
     ok: true, resId: resId, room: room, guest: guest, checkin: checkin,
     oldCheckout: oldCheckout, newCheckout: newCheckout
   }, syncResult);
+}
+
+/* ============================================================
+ *  updateCheckinDate_ — edit a booking's CHECK-IN date from the admin
+ *  dashboard (counterpart of updateCheckoutDate_).
+ *
+ *  POST { action:'updateCheckin', resId, newCheckin:'YYYY-MM-DD' }
+ *
+ *  Only writes Sheet1's check-in column. It does NOT push the new start
+ *  date to Apartmentery (no start-date sync helper exists — only
+ *  updateApartmenteryBookingEndDate*), so the response says so via
+ *  apartmenteryNote and the dashboard reminds Nathan to fix it by hand.
+ *
+ *  Conflict check: moving check-in EARLIER adds nights [newCheckin,
+ *  oldCheckin) — rejected if another live booking in the same room
+ *  overlaps that window. Moving LATER only frees nights, so no check.
+ *  Response shape on conflict matches the dashboard:
+ *  { ok:false, error:'conflict', conflict:{ resId, guest, checkout } }
+ * ============================================================ */
+function updateCheckinDate_(body) {
+  const resId = String(body.resId || '').trim();
+  const newCheckin = String(body.newCheckin || '').trim();
+  if (!resId) return { ok: false, error: 'resId required' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(newCheckin)) return { ok: false, error: 'newCheckin must be YYYY-MM-DD' };
+
+  const ss  = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  const src = ss.getSheetByName(SRC_BOOKING_SHEET);
+  if (!src) return { ok: false, error: 'Sheet1 not found' };
+
+  const data   = src.getDataRange().getValues();
+  const header = data[0];
+  const idx    = indexMap_(header, ['ResId', 'เลขห้อง', 'เช็คเอาท์', 'ชื่อแขก', 'เช็คอิน']);
+  if (idx.ResId < 0 || idx['เช็คอิน'] < 0 || idx['เช็คเอาท์'] < 0) return { ok: false, error: 'required columns not found' };
+
+  var rowIdx = -1, room = '', guest = '', oldCheckin = '', checkout = '';
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][idx.ResId] || '').trim() === resId) {
+      rowIdx = i;
+      room = String(data[i][idx['เลขห้อง']] || '').trim();
+      guest = idx['ชื่อแขก'] >= 0 ? String(data[i][idx['ชื่อแขก']] || '').trim() : '';
+      oldCheckin = formatCellDate_(data[i][idx['เช็คอิน']]);
+      checkout = formatCellDate_(data[i][idx['เช็คเอาท์']]);
+      break;
+    }
+  }
+  if (rowIdx === -1) return { ok: false, error: 'resId not found: ' + resId };
+  if (/ยกเลิก|cancel/i.test(room)) return { ok: false, error: 'booking is cancelled' };
+  if (checkout && newCheckin >= checkout) return { ok: false, error: 'newCheckin must be before checkout (' + checkout + ')' };
+
+  const apartmenteryNote = 'ยังไม่ได้ sync วันเช็คอินไป Apartmentery — ต้องแก้วันเช็คอินที่ Apartmentery เอง';
+
+  if (newCheckin === oldCheckin) {
+    // Idempotent retry — sheet already has this date.
+    return {
+      ok: true, alreadyApplied: true, resId: resId, room: room, guest: guest,
+      oldCheckin: oldCheckin, newCheckin: newCheckin, checkout: checkout,
+      apartmenterySynced: false, apartmenteryNote: apartmenteryNote
+    };
+  }
+
+  if (newCheckin < oldCheckin) {
+    const rn = roomNum_(room);
+    for (var j = 1; j < data.length; j++) {
+      if (j === rowIdx) continue;
+      const otherRoom = String(data[j][idx['เลขห้อง']] || '').trim();
+      if (/ยกเลิก|cancel/i.test(otherRoom)) continue;
+      if (roomNum_(otherRoom) !== rn) continue;
+      const otherCheckin  = formatCellDate_(data[j][idx['เช็คอิน']]);
+      const otherCheckout = formatCellDate_(data[j][idx['เช็คเอาท์']]);
+      if (!otherCheckin || !otherCheckout) continue;
+      // other stay [otherCheckin, otherCheckout) overlaps the added nights
+      // [newCheckin, oldCheckin)
+      if (otherCheckin < oldCheckin && otherCheckout > newCheckin) {
+        return {
+          ok: false,
+          error: 'conflict',
+          conflict: {
+            resId: String(data[j][idx.ResId] || '').trim(),
+            guest: idx['ชื่อแขก'] >= 0 ? String(data[j][idx['ชื่อแขก']] || '').trim() : '',
+            checkout: otherCheckout,
+          }
+        };
+      }
+    }
+  }
+
+  src.getRange(rowIdx + 1, idx['เช็คอิน'] + 1).setValue(newCheckin);
+  triggerStyleSheet1_();
+  invalidateRoomStatusCache_();
+
+  return {
+    ok: true, resId: resId, room: room, guest: guest,
+    oldCheckin: oldCheckin, newCheckin: newCheckin, checkout: checkout,
+    apartmenterySynced: false, apartmenteryNote: apartmenteryNote
+  };
 }
 
 function getCheckStatusMap_(existingSs) {
