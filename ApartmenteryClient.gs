@@ -823,6 +823,83 @@ function updateApartmenteryBookingEndDateForRoom(roomRaw, bookingId, newEndDate)
 }
 
 /**
+ * Changes a booking's startDate (check-in) on apartmentery — same
+ * read-edit-form-then-resubmit pattern as updateApartmenteryBookingEndDate
+ * (no PATCH-style partial update exists), with only startDate swapped and
+ * every other field resubmitted exactly as the live form has it.
+ *
+ * Added for the dashboard's "edit check-in date" action (updateCheckin).
+ * NOTE: apartmentery treats a startDate equal to another booking's endDate
+ * on the same unit as a collision (see updateApartmenteryBookingEndDate's
+ * docs), so a same-day-turnover target can be rejected — that surfaces as
+ * a thrown error, which syncApartmenteryCheckinDate_ turns into a note.
+ *
+ * @param {string} newStartDate  YYYY-MM-DD
+ */
+function updateApartmenteryBookingStartDate(branchId, unitId, bookingId, newStartDate) {
+  const state = _getApartmenteryBookingEditFormState_(branchId, unitId, bookingId);
+
+  if (state.startDate === newStartDate) {
+    return { ok: true, bookingId: bookingId, oldStartDate: state.startDate, newStartDate: newStartDate, alreadyApplied: true };
+  }
+  // apartmentery answers HTTP 400 when endDate < startDate; equal is a
+  // zero-night booking — don't blind-POST, report instead.
+  if (state.endDate && newStartDate >= state.endDate) {
+    return {
+      skipped: true,
+      reason: `Booking ${bookingId}: newStartDate ${newStartDate} is not before its endDate ` +
+              `${state.endDate} on Apartmentery — change the date there manually.`
+    };
+  }
+
+  const path = `/user/branch/${branchId}/unit/${unitId}/booking/${bookingId}/edit`;
+  const payload = {
+    startDate: newStartDate,
+    endDate: state.endDate,
+    note: state.note,
+    customerType: state.customerType,
+    customerId: state.customerId,
+    customerName: state.customerName,
+    customerMobileNo: state.customerMobileNo,
+    customerIdNo: state.customerIdNo,
+    customerEmail: state.customerEmail,
+    customerNote: state.customerNote,
+    remindEvery: state.remindEvery,
+    reminderFrequency: state.reminderFrequency,
+    remindOnDayInMonth: state.remindOnDayInMonth,
+    remindOnDayInWeek: state.remindOnDayInWeek,
+    remindOnDayInMonthInYear: state.remindOnDayInMonthInYear,
+    remindOnMonthInYear: state.remindOnMonthInYear,
+    remindInvoiceDayBefore: state.remindInvoiceDayBefore
+  };
+  if (state.reminderChecked) payload.reminder = 'true';
+
+  const response = _apartmenteryFetch_(path, { method: 'post', payload: payload });
+
+  const code = response.getResponseCode();
+  if (code >= 300 && code < 400) {
+    return { ok: true, bookingId: bookingId, oldStartDate: state.startDate, newStartDate: newStartDate };
+  }
+
+  Logger.log('updateApartmenteryBookingStartDate FAILED — payload sent: ' + JSON.stringify(payload));
+  Logger.log('updateApartmenteryBookingStartDate FAILED — response code ' + code + ', extracted error: ' +
+    _extractPlayErrorMessage_(response.getContentText()));
+
+  throw new Error(
+    `Updating startDate for booking ${bookingId} to ${newStartDate} did not redirect as expected ` +
+    `(HTTP ${code}). Response may indicate a validation error (e.g. collision with another booking) — inspect manually.`
+  );
+}
+
+function updateApartmenteryBookingStartDateForRoom(roomRaw, bookingId, newStartDate) {
+  const unit = getApartmenteryUnitForRoom(roomRaw);
+  if (!unit) {
+    return { skipped: true, reason: `Room "${roomRaw}" not found in ROOM_TO_UNIT_ID.` };
+  }
+  return updateApartmenteryBookingStartDate(unit.branchId, unit.unitId, bookingId, newStartDate);
+}
+
+/**
  * Re-fetches a unit's calendar listing page — the same GET a browser
  * does whenever the calendar view is shown or refreshed.
  *

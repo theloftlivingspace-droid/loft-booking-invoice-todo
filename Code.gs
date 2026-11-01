@@ -724,16 +724,56 @@ function updateCheckoutDate_(body) {
   }, syncResult);
 }
 
+/**
+ * Pushes a new check-in (startDate) to the matching Apartmentery booking.
+ * Finds the booking id the same way syncApartmenteryCheckoutDate_ does
+ * (stored id first, else lookup by room + guest + the OLD check-in date).
+ * Never throws — failures come back as apartmenteryNote for the dashboard.
+ */
+function syncApartmenteryCheckinDate_(resId, room, guest, oldCheckin, newCheckin) {
+  const result = { apartmenterySynced: false };
+  try {
+    var aptId = getApartmenteryBookingId_(resId);
+    if (!aptId) {
+      var foundId = findApartmenteryBookingIdForRoomByGuest_(room, guest, oldCheckin);
+      if (foundId) {
+        aptId = foundId;
+        setApartmenteryBookingId_(resId, foundId);
+        result.apartmenteryBackfilled = true;
+        triggerStyleSheet1_();
+      }
+    }
+    if (!aptId) {
+      result.apartmenteryNote = 'no apartmentery bookingId yet — nothing to sync';
+      return result;
+    }
+    const r = updateApartmenteryBookingStartDateForRoom(room, aptId, newCheckin);
+    if (r && r.skipped) {
+      result.apartmenteryNote = r.reason;
+    } else {
+      result.apartmenterySynced = true;
+    }
+  } catch (e) {
+    if (isApartmenterySessionExpiredError(e)) {
+      result.apartmenteryNote = 'Apartmentery session expired — update the date there manually';
+    } else {
+      result.apartmenteryNote = 'Apartmentery sync failed: ' + e;
+    }
+  }
+  return result;
+}
+
 /* ============================================================
  *  updateCheckinDate_ — edit a booking's CHECK-IN date from the admin
  *  dashboard (counterpart of updateCheckoutDate_).
  *
  *  POST { action:'updateCheckin', resId, newCheckin:'YYYY-MM-DD' }
  *
- *  Only writes Sheet1's check-in column. It does NOT push the new start
- *  date to Apartmentery (no start-date sync helper exists — only
- *  updateApartmenteryBookingEndDate*), so the response says so via
- *  apartmenteryNote and the dashboard reminds Nathan to fix it by hand.
+ *  Writes Sheet1's check-in column, then pushes the new startDate to the
+ *  matching Apartmentery booking (syncApartmenteryCheckinDate_). A failed
+ *  Apartmentery push (session expired, same-day-turnover collision, ...)
+ *  does not undo the sheet write; it comes back as apartmenterySynced:false
+ *  + apartmenteryNote.
  *
  *  Conflict check: moving check-in EARLIER adds nights [newCheckin,
  *  oldCheckin) — rejected if another live booking in the same room
@@ -771,15 +811,16 @@ function updateCheckinDate_(body) {
   if (/ยกเลิก|cancel/i.test(room)) return { ok: false, error: 'booking is cancelled' };
   if (checkout && newCheckin >= checkout) return { ok: false, error: 'newCheckin must be before checkout (' + checkout + ')' };
 
-  const apartmenteryNote = 'ยังไม่ได้ sync วันเช็คอินไป Apartmentery — ต้องแก้วันเช็คอินที่ Apartmentery เอง';
-
   if (newCheckin === oldCheckin) {
     // Idempotent retry — sheet already has this date.
-    return {
+    // Re-run the (idempotent) Apartmentery sync so a cut-off earlier attempt
+    // gets finished, same as updateCheckoutDate_'s retry path.
+    const syncAgain = syncApartmenteryCheckinDate_(resId, room, guest, oldCheckin, newCheckin);
+    invalidateRoomStatusCache_();
+    return Object.assign({
       ok: true, alreadyApplied: true, resId: resId, room: room, guest: guest,
-      oldCheckin: oldCheckin, newCheckin: newCheckin, checkout: checkout,
-      apartmenterySynced: false, apartmenteryNote: apartmenteryNote
-    };
+      oldCheckin: oldCheckin, newCheckin: newCheckin, checkout: checkout
+    }, syncAgain);
   }
 
   if (newCheckin < oldCheckin) {
@@ -810,13 +851,17 @@ function updateCheckinDate_(body) {
 
   src.getRange(rowIdx + 1, idx['เช็คอิน'] + 1).setValue(newCheckin);
   triggerStyleSheet1_();
-  invalidateRoomStatusCache_();
 
-  return {
+  // Sheet is now the source of truth; push the same change to Apartmentery.
+  // A failure here never undoes the sheet write — it's reported in
+  // apartmenteryNote so the dashboard can tell Nathan to fix it by hand.
+  const syncResult = syncApartmenteryCheckinDate_(resId, room, guest, oldCheckin, newCheckin);
+
+  invalidateRoomStatusCache_();
+  return Object.assign({
     ok: true, resId: resId, room: room, guest: guest,
-    oldCheckin: oldCheckin, newCheckin: newCheckin, checkout: checkout,
-    apartmenterySynced: false, apartmenteryNote: apartmenteryNote
-  };
+    oldCheckin: oldCheckin, newCheckin: newCheckin, checkout: checkout
+  }, syncResult);
 }
 
 function getCheckStatusMap_(existingSs) {
