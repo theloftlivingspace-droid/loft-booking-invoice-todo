@@ -44,24 +44,37 @@ function runBadgeCheckBackstop() {
   const props = PropertiesService.getScriptProperties();
   const botUrl = props.getProperty('BOT_URL') || 'https://hotel-line-bot.onrender.com';
 
-  try {
-    const response = UrlFetchApp.fetch(botUrl + '/push/badge-check-now', {
-      method: 'post',
-      contentType: 'application/json',
-      payload: JSON.stringify({}),
-      muteHttpExceptions: true
-    });
-    const code = response.getResponseCode();
-    if (code === 200) {
-      Logger.log('[runBadgeCheckBackstop] OK: ' + response.getContentText());
-    } else {
-      Logger.log('[runBadgeCheckBackstop] FAILED (' + code + '): ' + response.getContentText());
-      _alertBadgeCheckFailure_('hotel-line-bot ตอบกลับ ' + code + ': ' + response.getContentText());
+  // Render Free tier cold start can take 30-60s+, longer than UrlFetchApp
+  // is willing to wait, so the first attempt often times out while it
+  // wakes the instance. Retry (the endpoint is idempotent: runBadgeCheck
+  // no-ops if the count is unchanged) and only alert if ALL attempts fail.
+  const MAX_ATTEMPTS = 3;
+  const RETRY_DELAY_MS = 15000;
+  let lastError = '';
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const response = UrlFetchApp.fetch(botUrl + '/push/badge-check-now', {
+        method: 'post',
+        contentType: 'application/json',
+        payload: JSON.stringify({}),
+        muteHttpExceptions: true
+      });
+      const code = response.getResponseCode();
+      if (code === 200) {
+        Logger.log('[runBadgeCheckBackstop] OK (attempt ' + attempt + '): ' + response.getContentText());
+        return;
+      }
+      lastError = 'hotel-line-bot ตอบกลับ ' + code + ': ' + response.getContentText();
+      Logger.log('[runBadgeCheckBackstop] FAILED attempt ' + attempt + '/' + MAX_ATTEMPTS + ' (' + code + ')');
+    } catch (e) {
+      lastError = 'เรียก /push/badge-check-now ไม่สำเร็จ: ' + e.message;
+      Logger.log('[runBadgeCheckBackstop] EXCEPTION attempt ' + attempt + '/' + MAX_ATTEMPTS + ': ' + e.message);
     }
-  } catch (e) {
-    Logger.log('[runBadgeCheckBackstop] EXCEPTION: ' + e.message);
-    _alertBadgeCheckFailure_('เรียก /push/badge-check-now ไม่สำเร็จ: ' + e.message);
+    if (attempt < MAX_ATTEMPTS) Utilities.sleep(RETRY_DELAY_MS);
   }
+
+  _alertBadgeCheckFailure_('(ลองแล้ว ' + MAX_ATTEMPTS + ' ครั้ง) ' + lastError);
 }
 
 /**
