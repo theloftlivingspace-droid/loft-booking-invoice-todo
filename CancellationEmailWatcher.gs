@@ -261,8 +261,12 @@ function findBookingEntry_(guestRaw, ci, byGuest) {
   if (gkParts.length === 1 && gk.length <= 6 && ci) {
     var shortNameCands = [];
     Object.keys(byGuest).forEach(function (k) {
-      var kFirstToken = k.split(' ')[0];
-      if (kFirstToken === gk) {
+      // normG_ เรียงคำตามตัวอักษร → "Sam Ramos" กลายเป็น "ramos sam" ทำให้ token แรก
+      // ของ key ไม่ใช่ชื่อต้นเสมอไป (เคส HMEA8FWK9N 2026-11-20 "Sam" จับ "Sam Ramos"
+      // ไม่ได้เพราะ "ramos" มาก่อน "sam") และ Sheet1 บางแถวเป็นรูป "นามสกุล, ชื่อ"
+      // ด้วย จึงเทียบกับทุก token ของชื่อ — ความปลอดภัยยังคงอยู่เพราะต้องมี candidate
+      // เดียวเท่านั้นที่เช็คอินตรงภายใน ±1 วัน (ด้านล่าง) ไม่งั้นถือว่าไม่ชัวร์
+      if (k.split(' ').indexOf(gk) >= 0) {
         shortNameCands = shortNameCands.concat(byGuest[k]);
       }
     });
